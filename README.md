@@ -36,7 +36,6 @@ assert(user.initials === 'JD');
 // now create a new "modelized" version of the user instance
 const modelized = modelize<User>(user);
 
-
 // the "modelized" object is a new and different instance
 assert(modelized !== user);
 
