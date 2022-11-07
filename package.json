@@ -3,10 +3,25 @@
   "version": "0.0.2",
   "description": "Base model class with schema, validation and change watch.",
   "type": "module",
-  "main": "index.js",
+  "exports": {
+    "import": "./dist/index.ems.js",
+    "require": "./dist/index.cjs"
+  },
+  "main": "dist/index.cjs",
+  "module": "dist/index.ems.js",
+  "browser": "dist/index.umd.js",
+  "unpkg": "dist/index.umd.js",
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "release": "npx release --dir foo"
+    "clean": "rimraf dist/*",
+    "prettier": "prettier --write \"{src,tests}/**/*.{js,ts,json}\"",
+    "test": "node --loader ts-node/esm tests/index.ts",
+    "test:watch": "nodemon --delay 0.5 -q --watch \"src/**/*.*\" --watch \"tests/**/*.*\" --exec \"node --loader ts-node/esm tests/index.ts\" --",
+    "release": "npx release",
+    "build": "npm run clean && microbundle src/index.ts",
+    "dev": "npm run clean && microbundle watch src/index.ts"
   },
   "repository": {
     "type": "git",
@@ -19,16 +34,20 @@
   },
   "homepage": "https://github.com/marianmeres/base-model#readme",
   "devDependencies": {
-    "@marianmeres/release": "^0.0.2",
+    "@marianmeres/release": "^0.0.7",
     "@marianmeres/test-runner": "^2.0.10",
     "@types/node": "^18.11.9",
-    "kleur": "^4.1.5",
-    "minimist": "^1.2.7",
+    "lodash": "^4.17.21",
+    "lodash-es": "^4.17.21",
+    "microbundle": "^0.15.1",
+    "mkdirp": "^1.0.4",
     "prettier": "^2.7.1",
-    "prompt": "^1.3.0",
     "rimraf": "^3.0.2",
-    "totalist": "^3.0.0",
     "ts-node": "^10.9.1",
     "typescript": "^4.8.4"
+  },
+  "dependencies": {
+    "ajv": "^8.11.0",
+    "dequal": "^2.0.3"
   }
 }
