@@ -3,6 +3,11 @@
 Single utility function `modelize` which proxies your model instance to monitor
 changes, validate, and more...
 
+## Install
+```shell
+npm i @marianmeres/modelize
+```
+
 ## Usage example
 
 ```typescript
