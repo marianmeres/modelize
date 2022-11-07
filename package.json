@@ -25,14 +25,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/marianmeres/base-model.git"
+    "url": "git+https://github.com/marianmeres/modelize.git"
   },
   "author": "Marian Meres <marian@meres.sk>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/marianmeres/base-model/issues"
+    "url": "https://github.com/marianmeres/modelize/issues"
   },
-  "homepage": "https://github.com/marianmeres/base-model#readme",
+  "homepage": "https://github.com/marianmeres/modelize#readme",
   "devDependencies": {
     "@marianmeres/release": "^0.0.7",
     "@marianmeres/test-runner": "^2.0.10",
