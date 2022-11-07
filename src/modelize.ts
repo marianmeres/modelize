@@ -7,7 +7,7 @@ const clog = console.log;
 type Validator<T> = (model: T, schema, assert?: boolean) => boolean;
 
 export interface ModelizeConfig<T> {
-	// where to allow setting unknown properties (this is checked regardless of schema,
+	// whether to allow setting unknown properties (this is checked regardless of schema,
 	// just using the same naming convention)
 	additionalProperties: boolean;
 	// tsconfig.json strictNullChecks must be enabled to use JSONSchemaType
@@ -75,7 +75,7 @@ export function modelize<T extends object>(
 	let _schemaCompiledValidate;
 	const _updateConfig = (config: Partial<ModelizeConfig<T>>) => {
 		_CONFIG = { ..._CONFIG, ...config };
-		// if schema was provided, compile validator now (the compilation for same schema
+		// if schema was provided, compile validator now (the compilation for the same schema
 		// is cached internally at ajv level, so no worry here)
 		if (_CONFIG.schema) {
 			_schemaCompiledValidate = ajv.compile(_CONFIG.schema);
@@ -137,7 +137,7 @@ export function modelize<T extends object>(
 				try {
 					_validateOnlyIfValidatorOrSchema(target);
 				} catch (e) {
-					// undo... this is a little ugly
+					// undo... (this is kind of ugly)
 					Reflect.set(target, prop, old, receiver);
 					throw e;
 				}
@@ -179,6 +179,7 @@ export function modelize<T extends object>(
 			(keys || Object.keys(model)).forEach((k) => k in model && _dirty.add(k));
 			return model as Modelized<T>;
 		},
+		//
 		__getDirty: () => {
 			return (methodsMixin.__isDirty() || []).reduce(
 				(m, k) => ({ ...m, [k]: model[k] }),
@@ -236,7 +237,7 @@ export function modelize<T extends object>(
 
 	const _assertNonCollidingPropName = (name) => {
 		if (methodsMixin[name]) {
-			throw new TypeError(`'${name}' is a reserved base model method name!`);
+			throw new TypeError(`'${name}' is a reserved modelized method name!`);
 		}
 	};
 

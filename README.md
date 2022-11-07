@@ -59,6 +59,7 @@ interface ModelizedMethods<T> {
     __getSchema: () => any;
     __setValidator: (validator: Validator<T>) => Modelized<T>;
     __getValidator: () => Validator<T>;
+    __setAllowAdditionalProps: (flag: boolean) => Modelized<T>;
     __onChange: (
         cb: (model: T, changed: { property: keyof T; old: any; new: any }) => any
     ) => Function;
@@ -85,7 +86,7 @@ log = null; // reset
 // and unsubscribe
 unsubscribe();
 modelized.lastname = 'McEnroe';
-assert(log === null); // not susbscribed anymore
+assert(log === null); // not subscribed anymore
 
 // you can populate/hydrate multiple props at once, and by default, unknown props
 // are silently ignored
@@ -125,14 +126,12 @@ assert(modelized.__validate());
 
 // only John is allowed
 assert.throws(() => (modelized.firstname = 'Peter'));
-// firstname was not changed
 assert(modelized.firstname === 'John');
 ```
 
 It all works via shorthand notation and on `POJO` objects as well.
 
 ```typescript
-// signature:
 // modelize<T extends object>(
 //     model: T,
 //     data: Partial<Record<keyof T, any>> = {},

@@ -65,7 +65,7 @@ suite.test('readme example 1', () => {
 	// and unsubscribe
 	unsubscribe();
 	modelized.lastname = 'McEnroe';
-	assert(log === null); // not susbscribed anymore
+	assert(log === null); // not subscribed anymore
 
 	// you can populate/hydrate multiple props at once, and by default, unknown props
 	// are silently ignored
@@ -113,7 +113,6 @@ suite.test('readme example 1', () => {
 
 	// only John is allowed
 	assert.throws(() => (modelized.firstname = 'Peter'));
-	// firstname was not changed
 	assert(modelized.firstname === 'John');
 
 
