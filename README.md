@@ -143,9 +143,9 @@ It all works via shorthand notation and on `POJO` objects as well.
 //     config: Partial<ModelizeConfig<T>> = {}
 // ): Modelized<T>
 const user = modelize(
-    {}, // "pojo" instance
+    {}, // empty "pojo" instance
     { firstname: 'James', lastname: 'Bond' }, // initial data
-    // `additionalProperties` must be set to `true` with pojos
+    // `additionalProperties` must be set to `true` with empty pojos
     { additionalProperties: true, schema: null, validator: null } // config
 );
 assert(_.isEqual({ firstname: 'James', lastname: 'Bond' }, user.toJSON()));
