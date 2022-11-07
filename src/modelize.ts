@@ -51,7 +51,8 @@ const _validateErrorsToString = (errors) =>
 		}, [])
 		.join(', ');
 
-const ajv = new Ajv.default({ strict: false, validateFormats: false });
+// @ts-ignore
+const ajv = new Ajv({ strict: false, validateFormats: false });
 
 export function modelize<T extends object>(
 	model: T,
