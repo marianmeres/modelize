@@ -6,6 +6,9 @@ changes, validate, and more...
 ## Usage example
 
 ```typescript
+// SET UP /////////////////////////////////////////////////////////
+
+
 // some model class
 class User {
     // some public props ...
@@ -19,15 +22,20 @@ class User {
     }
 }
 
-// some model instance
+// and model instance
 const user = new User();
 user.firstname = 'John';
 user.lastname = 'Doe';
 assert(user.whoami() === 'John Doe');
 assert(user.initials === 'JD');
 
+
+// BEGIN ACTUAL EXAMPLE /////////////////////////////////////////////////////////
+
+
 // now create a new "modelized" version of the user instance
 const modelized = modelize<User>(user);
+
 
 // the "modelized" object is a new and different instance
 assert(modelized !== user);
