@@ -42,6 +42,7 @@ assert(modelized !== user);
 // but all props and methods are still available
 assert(modelized.firstname === 'John');
 assert(modelized.whoami() === 'John Doe');
+assert(modelized.initials === 'JD');
 
 // now, the new modelized version implements a bunch of new "virtual" utility methods
 // (internally via proxy trap). They all start with "__" prefix to minimize the name
