@@ -1,6 +1,6 @@
 {
   "name": "@marianmeres/base-model",
-  "version": "0.0.4",
+  "version": "0.1.0",
   "description": "Base model class with schema, validation and change watch.",
   "type": "module",
   "exports": {
