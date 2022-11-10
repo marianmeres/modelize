@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { strict as assert } from 'assert';
+import { strict as assert } from 'node:assert';
 import { TestRunner } from '@marianmeres/test-runner';
 import { fileURLToPath } from 'node:url';
 import _ from 'lodash';

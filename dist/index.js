@@ -1,5 +1,3 @@
-'use strict';
-
 const isObject = (o) => Object.prototype.toString.call(o) === '[object Object]';
 
 const isFn = (v) => typeof v === 'function';
@@ -7472,7 +7470,4 @@ function modelize(model, data = {}, config = {}) {
     return modelized;
 }
 
-exports.ModelizeUnableToValidate = ModelizeUnableToValidate;
-exports.ModelizeValidationError = ModelizeValidationError;
-exports.createPubSub = createPubSub;
-exports.modelize = modelize;
+export { ModelizeUnableToValidate, ModelizeValidationError, createPubSub, modelize };

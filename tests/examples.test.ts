@@ -1,10 +1,10 @@
 import path from 'node:path';
-import { strict as assert } from 'assert';
+import { strict as assert } from 'node:assert';
 import { TestRunner } from '@marianmeres/test-runner';
 import { fileURLToPath } from 'node:url';
 import { modelize } from '../src/index.js';
 import _ from 'lodash';
-import { Modelized, ModelizeValidationError } from '../src/modelize.js';
+import { ModelizeValidationError } from '../src/modelize.js';
 
 const clog = console.log;
 const __filename = fileURLToPath(import.meta.url);
@@ -115,11 +115,14 @@ suite.test('readme example 1', () => {
 	assert.throws(() => (modelized.firstname = 'Peter'));
 	assert(modelized.firstname === 'John');
 
-
 	// shorthand
-	const user2 = modelize({}, { firstname: 'James', lastname: 'Bond' }, {
-		additionalProperties: true
-	});
+	const user2 = modelize(
+		{},
+		{ firstname: 'James', lastname: 'Bond' },
+		{
+			additionalProperties: true,
+		}
+	);
 	assert(_.isEqual({ firstname: 'James', lastname: 'Bond' }, user2.toJSON()));
 });
 

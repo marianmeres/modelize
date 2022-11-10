@@ -1,13 +1,10 @@
 import path from 'node:path';
-import { strict as assert } from 'assert';
+import { strict as assert } from 'node:assert';
 import { TestRunner } from '@marianmeres/test-runner';
 import { fileURLToPath } from 'node:url';
-import { createPubSub } from '../src/create-pub-sub.js';
+import { createPubSub } from '../dist/index.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const suite = new TestRunner(path.basename(__filename));
+const suite = new TestRunner(path.basename(fileURLToPath(import.meta.url)));
 
 suite.test('pub sub works', () => {
 	const log = [];

@@ -3,14 +3,13 @@
   "version": "0.1.3",
   "description": "Single utility function `modelize` which proxies your model instance to monitor changes, validate, and more...",
   "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "browser": "./dist/index.umd.js",
   "exports": {
-    "import": "./dist/index.ems.js",
-    "require": "./dist/index.cjs"
+    "require": "./dist/index.cjs",
+    "import": "./dist/index.js"
   },
-  "main": "dist/index.cjs",
-  "module": "dist/index.ems.js",
-  "browser": "dist/index.umd.js",
-  "unpkg": "dist/index.umd.js",
   "files": [
     "dist"
   ],
@@ -19,9 +18,12 @@
     "prettier": "prettier --write \"{src,tests}/**/*.{js,ts,json}\"",
     "test": "node --loader ts-node/esm tests/index.ts",
     "test:watch": "nodemon --delay 0.5 -q --watch \"src/**/*.*\" --watch \"tests/**/*.*\" --exec \"node --loader ts-node/esm tests/index.ts\" --",
-    "release": "npx release",
-    "build": "npm run clean && microbundle src/index.ts",
-    "dev": "npm run clean && microbundle watch src/index.ts"
+    "xx-test": "test-runner",
+    "xx-test:watch": "nodemon -q -w dist -w tests -x test-runner --",
+    "release": "release",
+    "tsc": "tsc",
+    "build": "npm run clean && rollup -c",
+    "dev": "npm run clean && rollup -c -w"
   },
   "repository": {
     "type": "git",
@@ -35,15 +37,24 @@
   "homepage": "https://github.com/marianmeres/modelize#readme",
   "devDependencies": {
     "@marianmeres/release": "^0.0.7",
-    "@marianmeres/test-runner": "^2.0.10",
+    "@marianmeres/test-runner": "^2.0.13",
+    "@rollup/plugin-commonjs": "^23.0.2",
+    "@rollup/plugin-json": "^5.0.1",
+    "@rollup/plugin-node-resolve": "^15.0.1",
+    "@rollup/plugin-terser": "^0.1.0",
+    "@rollup/plugin-typescript": "^9.0.2",
     "@types/node": "^18.11.9",
     "lodash": "^4.17.21",
     "lodash-es": "^4.17.21",
     "microbundle": "^0.15.1",
     "mkdirp": "^1.0.4",
+    "nodemon": "^2.0.20",
     "prettier": "^2.7.1",
     "rimraf": "^3.0.2",
+    "rollup": "^3.2.0",
+    "rollup-plugin-dts": "^5.0.0",
     "ts-node": "^10.9.1",
+    "tslib": "^2.4.1",
     "typescript": "^4.8.4"
   },
   "dependencies": {
