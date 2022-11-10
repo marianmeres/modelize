@@ -121,11 +121,18 @@ export function modelize<T extends object>(
 	//
 	const _validateOnlyIfValidatorOrSchema = (model: T) => {
 		if (!_doValidate) return true;
-		if (isFn(_CONFIG.validator)) {
-			return _CONFIG.validator(model, _CONFIG.schema, true);
-		} else if (_CONFIG.schema) {
-			return _validateSchema(true);
+		let valid = true;
+		if (_CONFIG.schema) valid = _validateSchema(true);
+		if (valid && isFn(_CONFIG.validator)) {
+			valid = _CONFIG.validator(model, _CONFIG.schema, true);
 		}
+		// if we're still here invalid, we have now 2 issues:
+		if (!valid) {
+			throw new ModelizeValidationError(
+				`Model is not valid! (Additionally, custom validator error detected as well.)`
+			);
+		}
+		return valid;
 	};
 
 	//
@@ -190,17 +197,30 @@ export function modelize<T extends object>(
 		//
 		__validate: (assert: boolean = true) => {
 			if (!_doValidate) return true;
-			// do we have a custom validator fn?
-			if (isFn(_CONFIG.validator)) {
-				return _CONFIG.validator(model as Modelized<T>, _CONFIG.schema, assert);
-			} else if (_CONFIG.schema) {
-				return _validateSchema(assert);
-			} else if (assert) {
+
+			let valid = true;
+			let wasValidated = 0;
+
+			// if we have a schema, validate it first
+			if (_CONFIG.schema) {
+				valid = _validateSchema(assert);
+				wasValidated++;
+			}
+
+			// if we have a custom validator, continue with it as well
+			if (valid && isFn(_CONFIG.validator)) {
+				valid = _CONFIG.validator(model as Modelized<T>, _CONFIG.schema, assert);
+				wasValidated++;
+			}
+
+			// explicitly calling `__validate` without any internal validation available?!?
+			if (!wasValidated && assert) {
 				throw new ModelizeUnableToValidate(
 					'Unable to validate! Neither `validator` nor `schema` were provided.'
 				);
 			}
-			return true;
+
+			return valid;
 		},
 		//
 		__setSchema: (schema: any) => {

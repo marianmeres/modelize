@@ -288,4 +288,37 @@ suite.test('custom validator works', () => {
 	assert.throws(o.__validate, ModelizeValidationError);
 });
 
+suite.test('validators chain', () => {
+	class FooError extends Error {}
+	const o = modelize(
+		{ name: 'James Bond', code: 7 },
+		{},
+		{
+			schema: {
+				type: 'object',
+				properties: {
+					name: { type: 'string' },
+					code: { type: 'integer' },
+				},
+			},
+			// note: this is called after each property set
+			validator: (model, schema, assert) => {
+				const is7 = !model.code || model.code === 7;
+				if (assert && !is7) throw new FooError('seven only');
+				return is7;
+			},
+		}
+	);
+
+	// 1. schema level error
+	// @ts-ignore
+	assert.throws(() => (o.code = '7'), ModelizeValidationError);
+	// 2. custom validator level error
+	assert.throws(() => (o.code = 8), FooError);
+
+	// none of the above took effect, so, the model stays here valid
+	o.__validate();
+	assert(o.code === 7);
+});
+
 export default suite;
