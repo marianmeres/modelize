@@ -1,6 +1,6 @@
 {
   "name": "@marianmeres/modelize",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Single utility function `modelize` which proxies your model instance to monitor changes, validate, and more...",
   "type": "module",
   "main": "./dist/index.cjs",
