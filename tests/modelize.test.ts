@@ -116,6 +116,9 @@ suite.test('pojo model', () => {
 
 	// original object is always synced
 	assert(_.isEqual(data, o.toJSON()));
+
+	// access to original model reference
+	assert(o.__model() === data);
 });
 
 suite.test('class empty model', () => {

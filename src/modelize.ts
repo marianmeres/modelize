@@ -7,7 +7,7 @@ const clog = console.log;
 type Validator<T> = (model: T, schema, assert?: boolean) => boolean;
 
 export interface ModelizeConfig<T> {
-	// whether to allow setting unknown properties (this is checked regardless of schema,
+	// whether to allow setting unknown of properties (this is checked regardless of schema,
 	// just using the same naming convention)
 	additionalProperties: boolean;
 	// tsconfig.json strictNullChecks must be enabled to use JSONSchemaType
@@ -36,6 +36,8 @@ interface ModelizedMethods<T> {
 	// for data hackings... subject of change
 	__pauseValidate: () => Modelized<T>;
 	__resumeValidate: () => Modelized<T>;
+	//
+	__model: () => T;
 }
 
 export type Modelized<T> = T & ModelizedMethods<T>;
@@ -224,14 +226,14 @@ export function modelize<T extends object>(
 		},
 		//
 		__setSchema: (schema: any) => {
-			_updateConfig({ schema: schema });
+			_updateConfig({ schema });
 			return model as Modelized<T>;
 		},
 		//
 		__getSchema: () => _CONFIG.schema,
 		//
 		__setValidator: (validator: Validator<T>) => {
-			_updateConfig({ validator: validator });
+			_updateConfig({ validator });
 			return model as Modelized<T>;
 		},
 		//
@@ -254,6 +256,8 @@ export function modelize<T extends object>(
 			_doValidate = true;
 			return model as Modelized<T>;
 		},
+		//
+		__model: () => model,
 	};
 
 	const _assertNonCollidingPropName = (name) => {
@@ -280,7 +284,7 @@ export function modelize<T extends object>(
 		set,
 	}) as Modelized<T>;
 
-	// if data are provided, hydrate now, set clean afterwards
+	// if data were provided, hydrate now, set clean afterwards
 	if (data) {
 		modelized.__hydrate(data);
 		// makes no sense to be dirty at "construct" time (if not desired, simply `__setDirty`)

@@ -24,6 +24,7 @@ interface ModelizedMethods<T> {
     }) => any) => Function;
     __pauseValidate: () => Modelized<T>;
     __resumeValidate: () => Modelized<T>;
+    __model: () => T;
 }
 export declare type Modelized<T> = T & ModelizedMethods<T>;
 export declare class ModelizeUnableToValidate extends Error {
