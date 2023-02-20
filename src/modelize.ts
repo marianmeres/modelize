@@ -7,7 +7,7 @@ const clog = console.log;
 type Validator<T> = (model: T, schema, assert?: boolean) => boolean;
 
 export interface ModelizeConfig<T> {
-	// whether to allow setting unknown of properties (this is checked regardless of schema,
+	// whether to allow setting of unknown properties (this is checked regardless of schema,
 	// just using the same naming convention)
 	additionalProperties: boolean;
 	// tsconfig.json strictNullChecks must be enabled to use JSONSchemaType

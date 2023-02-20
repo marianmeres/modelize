@@ -121,7 +121,6 @@ assert(modelized.__validate());
 assert.throws(() => (modelized.firstname = 123));
 
 // if json-schema is not your thing, you can create your own validator function
-// which has precedence over json-schema validation
 modelized.__setValidator((model, schema, assert) => {
     const isJohn = !model.firstname || model.firstname === 'John';
     if (assert && !isJohn) throw new ModelizeValidationError('John only');
