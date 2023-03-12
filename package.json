@@ -1,6 +1,6 @@
 {
   "name": "@marianmeres/modelize",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Single utility function `modelize` which proxies your model instance to monitor changes, validate, and more...",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -10,6 +10,7 @@
     "require": "./dist/index.cjs",
     "import": "./dist/index.js"
   },
+  "types": "./dist/index.d.ts",
   "files": [
     "dist"
   ],
@@ -18,8 +19,6 @@
     "prettier": "prettier --write \"{src,tests}/**/*.{js,ts,json}\"",
     "test": "node --loader ts-node/esm tests/index.ts",
     "test:watch": "nodemon --delay 0.5 -q --watch \"src/**/*.*\" --watch \"tests/**/*.*\" --exec \"node --loader ts-node/esm tests/index.ts\" --",
-    "xx-test": "test-runner",
-    "xx-test:watch": "nodemon -q -w dist -w tests -x test-runner --",
     "release": "release",
     "tsc": "tsc",
     "build": "npm run clean && rollup -c",
@@ -36,7 +35,7 @@
   },
   "homepage": "https://github.com/marianmeres/modelize#readme",
   "devDependencies": {
-    "@marianmeres/release": "^0.0.7",
+    "@marianmeres/release": "^0.0.9",
     "@marianmeres/test-runner": "^2.0.13",
     "@rollup/plugin-commonjs": "^23.0.2",
     "@rollup/plugin-json": "^5.0.1",
