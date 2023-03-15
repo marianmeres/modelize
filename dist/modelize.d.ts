@@ -1,4 +1,4 @@
-declare type Validator<T> = (model: T, schema: any, assert?: boolean) => boolean;
+type Validator<T> = (model: T, schema: any, assert?: boolean) => boolean;
 export interface ModelizeConfig<T> {
     additionalProperties: boolean;
     schema: any;
@@ -26,7 +26,7 @@ interface ModelizedMethods<T> {
     __resumeValidate: () => Modelized<T>;
     __model: () => T;
 }
-export declare type Modelized<T> = T & ModelizedMethods<T>;
+export type Modelized<T> = T & ModelizedMethods<T>;
 export declare class ModelizeUnableToValidate extends Error {
 }
 export declare class ModelizeValidationError extends Error {

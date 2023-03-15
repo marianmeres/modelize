@@ -274,7 +274,7 @@ export function modelize<T extends object>(
 		get(target, prop, receiver) {
 			const value = Reflect.get(target, prop, receiver);
 			if (isFn(value)) {
-				return (...args) => value.apply(target, args);
+				return (...args) => (value as any).apply(target, args);
 			} else if (methodsMixin[prop]) {
 				return (...args) => methodsMixin[prop].apply(target, args);
 			} else {

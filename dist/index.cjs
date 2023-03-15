@@ -36,7 +36,11 @@ function getDefaultExportFromCjs (x) {
 	return x && x.__esModule && Object.prototype.hasOwnProperty.call(x, 'default') ? x['default'] : x;
 }
 
-var ajv$1 = {exports: {}};
+var ajvExports = {};
+var ajv$1 = {
+  get exports(){ return ajvExports; },
+  set exports(v){ ajvExports = v; },
+};
 
 var core$2 = {};
 
@@ -50,162 +54,169 @@ var codegen = {};
 
 var code$1 = {};
 
-(function (exports) {
-	Object.defineProperty(exports, "__esModule", { value: true });
-	exports.regexpCode = exports.getEsmExportName = exports.getProperty = exports.safeStringify = exports.stringify = exports.strConcat = exports.addCodeArg = exports.str = exports._ = exports.nil = exports._Code = exports.Name = exports.IDENTIFIER = exports._CodeOrName = void 0;
-	class _CodeOrName {
-	}
-	exports._CodeOrName = _CodeOrName;
-	exports.IDENTIFIER = /^[a-z$_][a-z$_0-9]*$/i;
-	class Name extends _CodeOrName {
-	    constructor(s) {
-	        super();
-	        if (!exports.IDENTIFIER.test(s))
-	            throw new Error("CodeGen: name must be a valid identifier");
-	        this.str = s;
-	    }
-	    toString() {
-	        return this.str;
-	    }
-	    emptyStr() {
-	        return false;
-	    }
-	    get names() {
-	        return { [this.str]: 1 };
-	    }
-	}
-	exports.Name = Name;
-	class _Code extends _CodeOrName {
-	    constructor(code) {
-	        super();
-	        this._items = typeof code === "string" ? [code] : code;
-	    }
-	    toString() {
-	        return this.str;
-	    }
-	    emptyStr() {
-	        if (this._items.length > 1)
-	            return false;
-	        const item = this._items[0];
-	        return item === "" || item === '""';
-	    }
-	    get str() {
-	        var _a;
-	        return ((_a = this._str) !== null && _a !== void 0 ? _a : (this._str = this._items.reduce((s, c) => `${s}${c}`, "")));
-	    }
-	    get names() {
-	        var _a;
-	        return ((_a = this._names) !== null && _a !== void 0 ? _a : (this._names = this._items.reduce((names, c) => {
-	            if (c instanceof Name)
-	                names[c.str] = (names[c.str] || 0) + 1;
-	            return names;
-	        }, {})));
-	    }
-	}
-	exports._Code = _Code;
-	exports.nil = new _Code("");
-	function _(strs, ...args) {
-	    const code = [strs[0]];
-	    let i = 0;
-	    while (i < args.length) {
-	        addCodeArg(code, args[i]);
-	        code.push(strs[++i]);
-	    }
-	    return new _Code(code);
-	}
-	exports._ = _;
-	const plus = new _Code("+");
-	function str(strs, ...args) {
-	    const expr = [safeStringify(strs[0])];
-	    let i = 0;
-	    while (i < args.length) {
-	        expr.push(plus);
-	        addCodeArg(expr, args[i]);
-	        expr.push(plus, safeStringify(strs[++i]));
-	    }
-	    optimize(expr);
-	    return new _Code(expr);
-	}
-	exports.str = str;
-	function addCodeArg(code, arg) {
-	    if (arg instanceof _Code)
-	        code.push(...arg._items);
-	    else if (arg instanceof Name)
-	        code.push(arg);
-	    else
-	        code.push(interpolate(arg));
-	}
-	exports.addCodeArg = addCodeArg;
-	function optimize(expr) {
-	    let i = 1;
-	    while (i < expr.length - 1) {
-	        if (expr[i] === plus) {
-	            const res = mergeExprItems(expr[i - 1], expr[i + 1]);
-	            if (res !== undefined) {
-	                expr.splice(i - 1, 3, res);
-	                continue;
-	            }
-	            expr[i++] = "+";
-	        }
-	        i++;
-	    }
-	}
-	function mergeExprItems(a, b) {
-	    if (b === '""')
-	        return a;
-	    if (a === '""')
-	        return b;
-	    if (typeof a == "string") {
-	        if (b instanceof Name || a[a.length - 1] !== '"')
-	            return;
-	        if (typeof b != "string")
-	            return `${a.slice(0, -1)}${b}"`;
-	        if (b[0] === '"')
-	            return a.slice(0, -1) + b.slice(1);
-	        return;
-	    }
-	    if (typeof b == "string" && b[0] === '"' && !(a instanceof Name))
-	        return `"${a}${b.slice(1)}`;
-	    return;
-	}
-	function strConcat(c1, c2) {
-	    return c2.emptyStr() ? c1 : c1.emptyStr() ? c2 : str `${c1}${c2}`;
-	}
-	exports.strConcat = strConcat;
-	// TODO do not allow arrays here
-	function interpolate(x) {
-	    return typeof x == "number" || typeof x == "boolean" || x === null
-	        ? x
-	        : safeStringify(Array.isArray(x) ? x.join(",") : x);
-	}
-	function stringify(x) {
-	    return new _Code(safeStringify(x));
-	}
-	exports.stringify = stringify;
-	function safeStringify(x) {
-	    return JSON.stringify(x)
-	        .replace(/\u2028/g, "\\u2028")
-	        .replace(/\u2029/g, "\\u2029");
-	}
-	exports.safeStringify = safeStringify;
-	function getProperty(key) {
-	    return typeof key == "string" && exports.IDENTIFIER.test(key) ? new _Code(`.${key}`) : _ `[${key}]`;
-	}
-	exports.getProperty = getProperty;
-	//Does best effort to format the name properly
-	function getEsmExportName(key) {
-	    if (typeof key == "string" && exports.IDENTIFIER.test(key)) {
-	        return new _Code(`${key}`);
-	    }
-	    throw new Error(`CodeGen: invalid export name: ${key}, use explicit $id name mapping`);
-	}
-	exports.getEsmExportName = getEsmExportName;
-	function regexpCode(rx) {
-	    return new _Code(rx.toString());
-	}
-	exports.regexpCode = regexpCode;
-	
+var hasRequiredCode$1;
+
+function requireCode$1 () {
+	if (hasRequiredCode$1) return code$1;
+	hasRequiredCode$1 = 1;
+	(function (exports) {
+		Object.defineProperty(exports, "__esModule", { value: true });
+		exports.regexpCode = exports.getEsmExportName = exports.getProperty = exports.safeStringify = exports.stringify = exports.strConcat = exports.addCodeArg = exports.str = exports._ = exports.nil = exports._Code = exports.Name = exports.IDENTIFIER = exports._CodeOrName = void 0;
+		class _CodeOrName {
+		}
+		exports._CodeOrName = _CodeOrName;
+		exports.IDENTIFIER = /^[a-z$_][a-z$_0-9]*$/i;
+		class Name extends _CodeOrName {
+		    constructor(s) {
+		        super();
+		        if (!exports.IDENTIFIER.test(s))
+		            throw new Error("CodeGen: name must be a valid identifier");
+		        this.str = s;
+		    }
+		    toString() {
+		        return this.str;
+		    }
+		    emptyStr() {
+		        return false;
+		    }
+		    get names() {
+		        return { [this.str]: 1 };
+		    }
+		}
+		exports.Name = Name;
+		class _Code extends _CodeOrName {
+		    constructor(code) {
+		        super();
+		        this._items = typeof code === "string" ? [code] : code;
+		    }
+		    toString() {
+		        return this.str;
+		    }
+		    emptyStr() {
+		        if (this._items.length > 1)
+		            return false;
+		        const item = this._items[0];
+		        return item === "" || item === '""';
+		    }
+		    get str() {
+		        var _a;
+		        return ((_a = this._str) !== null && _a !== void 0 ? _a : (this._str = this._items.reduce((s, c) => `${s}${c}`, "")));
+		    }
+		    get names() {
+		        var _a;
+		        return ((_a = this._names) !== null && _a !== void 0 ? _a : (this._names = this._items.reduce((names, c) => {
+		            if (c instanceof Name)
+		                names[c.str] = (names[c.str] || 0) + 1;
+		            return names;
+		        }, {})));
+		    }
+		}
+		exports._Code = _Code;
+		exports.nil = new _Code("");
+		function _(strs, ...args) {
+		    const code = [strs[0]];
+		    let i = 0;
+		    while (i < args.length) {
+		        addCodeArg(code, args[i]);
+		        code.push(strs[++i]);
+		    }
+		    return new _Code(code);
+		}
+		exports._ = _;
+		const plus = new _Code("+");
+		function str(strs, ...args) {
+		    const expr = [safeStringify(strs[0])];
+		    let i = 0;
+		    while (i < args.length) {
+		        expr.push(plus);
+		        addCodeArg(expr, args[i]);
+		        expr.push(plus, safeStringify(strs[++i]));
+		    }
+		    optimize(expr);
+		    return new _Code(expr);
+		}
+		exports.str = str;
+		function addCodeArg(code, arg) {
+		    if (arg instanceof _Code)
+		        code.push(...arg._items);
+		    else if (arg instanceof Name)
+		        code.push(arg);
+		    else
+		        code.push(interpolate(arg));
+		}
+		exports.addCodeArg = addCodeArg;
+		function optimize(expr) {
+		    let i = 1;
+		    while (i < expr.length - 1) {
+		        if (expr[i] === plus) {
+		            const res = mergeExprItems(expr[i - 1], expr[i + 1]);
+		            if (res !== undefined) {
+		                expr.splice(i - 1, 3, res);
+		                continue;
+		            }
+		            expr[i++] = "+";
+		        }
+		        i++;
+		    }
+		}
+		function mergeExprItems(a, b) {
+		    if (b === '""')
+		        return a;
+		    if (a === '""')
+		        return b;
+		    if (typeof a == "string") {
+		        if (b instanceof Name || a[a.length - 1] !== '"')
+		            return;
+		        if (typeof b != "string")
+		            return `${a.slice(0, -1)}${b}"`;
+		        if (b[0] === '"')
+		            return a.slice(0, -1) + b.slice(1);
+		        return;
+		    }
+		    if (typeof b == "string" && b[0] === '"' && !(a instanceof Name))
+		        return `"${a}${b.slice(1)}`;
+		    return;
+		}
+		function strConcat(c1, c2) {
+		    return c2.emptyStr() ? c1 : c1.emptyStr() ? c2 : str `${c1}${c2}`;
+		}
+		exports.strConcat = strConcat;
+		// TODO do not allow arrays here
+		function interpolate(x) {
+		    return typeof x == "number" || typeof x == "boolean" || x === null
+		        ? x
+		        : safeStringify(Array.isArray(x) ? x.join(",") : x);
+		}
+		function stringify(x) {
+		    return new _Code(safeStringify(x));
+		}
+		exports.stringify = stringify;
+		function safeStringify(x) {
+		    return JSON.stringify(x)
+		        .replace(/\u2028/g, "\\u2028")
+		        .replace(/\u2029/g, "\\u2029");
+		}
+		exports.safeStringify = safeStringify;
+		function getProperty(key) {
+		    return typeof key == "string" && exports.IDENTIFIER.test(key) ? new _Code(`.${key}`) : _ `[${key}]`;
+		}
+		exports.getProperty = getProperty;
+		//Does best effort to format the name properly
+		function getEsmExportName(key) {
+		    if (typeof key == "string" && exports.IDENTIFIER.test(key)) {
+		        return new _Code(`${key}`);
+		    }
+		    throw new Error(`CodeGen: invalid export name: ${key}, use explicit $id name mapping`);
+		}
+		exports.getEsmExportName = getEsmExportName;
+		function regexpCode(rx) {
+		    return new _Code(rx.toString());
+		}
+		exports.regexpCode = regexpCode;
+		
 } (code$1));
+	return code$1;
+}
 
 var scope = {};
 
@@ -217,7 +228,7 @@ function requireScope () {
 	(function (exports) {
 		Object.defineProperty(exports, "__esModule", { value: true });
 		exports.ValueScope = exports.ValueScopeName = exports.Scope = exports.varKinds = exports.UsedValueState = void 0;
-		const code_1 = code$1;
+		const code_1 = requireCode$1();
 		class ValueError extends Error {
 		    constructor(name) {
 		        super(`CodeGen: "code" for ${name} not defined`);
@@ -369,9 +380,9 @@ function requireCodegen () {
 	(function (exports) {
 		Object.defineProperty(exports, "__esModule", { value: true });
 		exports.or = exports.and = exports.not = exports.CodeGen = exports.operators = exports.varKinds = exports.ValueScopeName = exports.ValueScope = exports.Scope = exports.Name = exports.regexpCode = exports.stringify = exports.getProperty = exports.nil = exports.strConcat = exports.str = exports._ = void 0;
-		const code_1 = code$1;
+		const code_1 = requireCode$1();
 		const scope_1 = requireScope();
-		var code_2 = code$1;
+		var code_2 = requireCode$1();
 		Object.defineProperty(exports, "_", { enumerable: true, get: function () { return code_2._; } });
 		Object.defineProperty(exports, "str", { enumerable: true, get: function () { return code_2.str; } });
 		Object.defineProperty(exports, "strConcat", { enumerable: true, get: function () { return code_2.strConcat; } });
@@ -1073,7 +1084,7 @@ var util = {};
 	Object.defineProperty(exports, "__esModule", { value: true });
 	exports.checkStrictMode = exports.getErrorPath = exports.Type = exports.useFunc = exports.setEvaluated = exports.evaluatedPropsToName = exports.mergeEvaluated = exports.eachItem = exports.unescapeJsonPointer = exports.escapeJsonPointer = exports.escapeFragment = exports.unescapeFragment = exports.schemaRefOrVal = exports.schemaHasRulesButRef = exports.schemaHasRules = exports.checkUnknownRules = exports.alwaysValidSchema = exports.toHash = void 0;
 	const codegen_1 = requireCodegen();
-	const code_1 = code$1;
+	const code_1 = requireCode$1();
 	// TODO refactor to use Set
 	function toHash(arr) {
 	    const hash = {};
@@ -2190,7 +2201,11 @@ var fastDeepEqual = function equal(a, b) {
   return a!==a && b!==b;
 };
 
-var jsonSchemaTraverse = {exports: {}};
+var jsonSchemaTraverseExports = {};
+var jsonSchemaTraverse = {
+  get exports(){ return jsonSchemaTraverseExports; },
+  set exports(v){ jsonSchemaTraverseExports = v; },
+};
 
 var traverse$1 = jsonSchemaTraverse.exports = function (schema, opts, cb) {
   // Legacy support for v0.3.1 and earlier.
@@ -2288,7 +2303,7 @@ Object.defineProperty(resolve$1, "__esModule", { value: true });
 resolve$1.getSchemaRefs = resolve$1.resolveUrl = resolve$1.normalizeId = resolve$1._getFullPath = resolve$1.getFullPath = resolve$1.inlineRef = void 0;
 const util_1$l = util;
 const equal$2 = fastDeepEqual;
-const traverse = jsonSchemaTraverse.exports;
+const traverse = jsonSchemaTraverseExports;
 // TODO refactor to use keyword definitions
 const SIMPLE_INLINED = new Set([
     "type",
@@ -2688,7 +2703,7 @@ function requireValidate () {
 	            strictTypesError(it, `type "${t}" not allowed by context "${it.dataTypes.join(",")}"`);
 	        }
 	    });
-	    it.dataTypes = it.dataTypes.filter((t) => includesType(types, t));
+	    narrowSchemaTypes(it, types);
 	}
 	function checkMultipleTypes(it, ts) {
 	    if (ts.length > 1 && !(ts.length === 2 && ts.includes("null"))) {
@@ -2712,6 +2727,16 @@ function requireValidate () {
 	}
 	function includesType(ts, t) {
 	    return ts.includes(t) || (t === "integer" && ts.includes("number"));
+	}
+	function narrowSchemaTypes(it, withTypes) {
+	    const ts = [];
+	    for (const t of it.dataTypes) {
+	        if (includesType(withTypes, t))
+	            ts.push(t);
+	        else if (withTypes.includes("integer") && t === "number")
+	            ts.push("integer");
+	    }
+	    it.dataTypes = ts;
 	}
 	function strictTypesError(it, msg) {
 	    const schemaPath = it.schemaEnv.baseId + it.errSchemaPath;
@@ -2956,35 +2981,51 @@ function requireValidate () {
 
 var validation_error = {};
 
-Object.defineProperty(validation_error, "__esModule", { value: true });
-class ValidationError extends Error {
-    constructor(errors) {
-        super("validation failed");
-        this.errors = errors;
-        this.ajv = this.validation = true;
-    }
+var hasRequiredValidation_error;
+
+function requireValidation_error () {
+	if (hasRequiredValidation_error) return validation_error;
+	hasRequiredValidation_error = 1;
+	Object.defineProperty(validation_error, "__esModule", { value: true });
+	class ValidationError extends Error {
+	    constructor(errors) {
+	        super("validation failed");
+	        this.errors = errors;
+	        this.ajv = this.validation = true;
+	    }
+	}
+	validation_error.default = ValidationError;
+	
+	return validation_error;
 }
-validation_error.default = ValidationError;
 
 var ref_error = {};
 
-Object.defineProperty(ref_error, "__esModule", { value: true });
-const resolve_1$1 = resolve$1;
-class MissingRefError extends Error {
-    constructor(resolver, baseId, ref, msg) {
-        super(msg || `can't resolve reference ${ref} from id ${baseId}`);
-        this.missingRef = (0, resolve_1$1.resolveUrl)(resolver, baseId, ref);
-        this.missingSchema = (0, resolve_1$1.normalizeId)((0, resolve_1$1.getFullPath)(resolver, this.missingRef));
-    }
+var hasRequiredRef_error;
+
+function requireRef_error () {
+	if (hasRequiredRef_error) return ref_error;
+	hasRequiredRef_error = 1;
+	Object.defineProperty(ref_error, "__esModule", { value: true });
+	const resolve_1 = resolve$1;
+	class MissingRefError extends Error {
+	    constructor(resolver, baseId, ref, msg) {
+	        super(msg || `can't resolve reference ${ref} from id ${baseId}`);
+	        this.missingRef = (0, resolve_1.resolveUrl)(resolver, baseId, ref);
+	        this.missingSchema = (0, resolve_1.normalizeId)((0, resolve_1.getFullPath)(resolver, this.missingRef));
+	    }
+	}
+	ref_error.default = MissingRefError;
+	
+	return ref_error;
 }
-ref_error.default = MissingRefError;
 
 var compile = {};
 
 Object.defineProperty(compile, "__esModule", { value: true });
 compile.resolveSchema = compile.getCompilingSchema = compile.resolveRef = compile.compileSchema = compile.SchemaEnv = void 0;
 const codegen_1$m = requireCodegen();
-const validation_error_1 = validation_error;
+const validation_error_1 = requireValidation_error();
 const names_1$2 = requireNames();
 const resolve_1 = resolve$1;
 const util_1$k = util;
@@ -3253,7 +3294,11 @@ var require$$9 = {
 
 var uri$1 = {};
 
-var uri_all = {exports: {}};
+var uri_allExports = {};
+var uri_all = {
+  get exports(){ return uri_allExports; },
+  set exports(v){ uri_allExports = v; },
+};
 
 /** @license URI.js v4.4.1 (c) 2011 Gary Court. License: http://github.com/garycourt/uri-js */
 
@@ -4659,10 +4704,10 @@ var uri_all = {exports: {}};
 
 	})));
 	
-} (uri_all, uri_all.exports));
+} (uri_all, uri_allExports));
 
 Object.defineProperty(uri$1, "__esModule", { value: true });
-const uri = uri_all.exports;
+const uri = uri_allExports;
 uri.code = 'require("ajv/dist/runtime/uri").default';
 uri$1.default = uri;
 
@@ -4678,8 +4723,8 @@ uri$1.default = uri;
 	Object.defineProperty(exports, "nil", { enumerable: true, get: function () { return codegen_1.nil; } });
 	Object.defineProperty(exports, "Name", { enumerable: true, get: function () { return codegen_1.Name; } });
 	Object.defineProperty(exports, "CodeGen", { enumerable: true, get: function () { return codegen_1.CodeGen; } });
-	const validation_error_1 = validation_error;
-	const ref_error_1 = ref_error;
+	const validation_error_1 = requireValidation_error();
+	const ref_error_1 = requireRef_error();
 	const rules_1 = rules;
 	const compile_1 = compile;
 	const codegen_2 = requireCodegen();
@@ -5304,7 +5349,7 @@ var ref = {};
 
 Object.defineProperty(ref, "__esModule", { value: true });
 ref.callRef = ref.getValidate = void 0;
-const ref_error_1 = ref_error;
+const ref_error_1 = requireRef_error();
 const code_1$8 = requireCode();
 const codegen_1$l = requireCodegen();
 const names_1$1 = requireNames();
@@ -7245,7 +7290,7 @@ var require$$3 = {
 
 (function (module, exports) {
 	Object.defineProperty(exports, "__esModule", { value: true });
-	exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = void 0;
+	exports.MissingRefError = exports.ValidationError = exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = void 0;
 	const core_1 = core$2;
 	const draft7_1 = draft7;
 	const discriminator_1 = discriminator;
@@ -7286,10 +7331,14 @@ var require$$3 = {
 	Object.defineProperty(exports, "nil", { enumerable: true, get: function () { return codegen_1.nil; } });
 	Object.defineProperty(exports, "Name", { enumerable: true, get: function () { return codegen_1.Name; } });
 	Object.defineProperty(exports, "CodeGen", { enumerable: true, get: function () { return codegen_1.CodeGen; } });
+	var validation_error_1 = requireValidation_error();
+	Object.defineProperty(exports, "ValidationError", { enumerable: true, get: function () { return validation_error_1.default; } });
+	var ref_error_1 = requireRef_error();
+	Object.defineProperty(exports, "MissingRefError", { enumerable: true, get: function () { return ref_error_1.default; } });
 	
-} (ajv$1, ajv$1.exports));
+} (ajv$1, ajvExports));
 
-var Ajv = /*@__PURE__*/getDefaultExportFromCjs(ajv$1.exports);
+var Ajv = /*@__PURE__*/getDefaultExportFromCjs(ajvExports);
 
 class ModelizeUnableToValidate extends Error {
 }
