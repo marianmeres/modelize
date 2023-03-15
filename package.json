@@ -1,6 +1,6 @@
 {
   "name": "@marianmeres/modelize",
-  "version": "0.1.7",
+  "version": "1.0.0",
   "description": "Single utility function `modelize` which proxies your model instance to monitor changes, validate, and more...",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -35,7 +35,7 @@
   },
   "homepage": "https://github.com/marianmeres/modelize#readme",
   "devDependencies": {
-    "@marianmeres/release": "^0.0.9",
+    "@marianmeres/release": "^1.0.0",
     "@marianmeres/test-runner": "^2.0.13",
     "@rollup/plugin-commonjs": "^23.0.2",
     "@rollup/plugin-json": "^5.0.1",
