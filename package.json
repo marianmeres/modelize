@@ -1,62 +1,64 @@
 {
-  "name": "@marianmeres/modelize",
-  "version": "1.0.1",
-  "description": "Single utility function `modelize` which proxies your model instance to monitor changes, validate, and more...",
-  "type": "module",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "browser": "./dist/index.umd.js",
-  "exports": {
-    "require": "./dist/index.cjs",
-    "import": "./dist/index.js"
-  },
-  "types": "./dist/index.d.ts",
-  "files": [
-    "dist"
-  ],
-  "scripts": {
-    "clean": "rimraf dist/*",
-    "prettier": "prettier --write \"{src,tests}/**/*.{js,ts,json}\"",
-    "test": "node --loader ts-node/esm tests/index.ts",
-    "test:watch": "nodemon --delay 0.5 -q --watch \"src/**/*.*\" --watch \"tests/**/*.*\" --exec \"node --loader ts-node/esm tests/index.ts\" --",
-    "release": "release",
-    "tsc": "tsc",
-    "build": "npm run clean && rollup -c",
-    "dev": "npm run clean && rollup -c -w"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/marianmeres/modelize.git"
-  },
-  "author": "Marian Meres <marian@meres.sk>",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/marianmeres/modelize/issues"
-  },
-  "homepage": "https://github.com/marianmeres/modelize#readme",
-  "devDependencies": {
-    "@marianmeres/release": "^1.0.0",
-    "@marianmeres/test-runner": "^2.0.13",
-    "@rollup/plugin-commonjs": "^23.0.2",
-    "@rollup/plugin-json": "^5.0.1",
-    "@rollup/plugin-node-resolve": "^15.0.1",
-    "@rollup/plugin-terser": "^0.1.0",
-    "@rollup/plugin-typescript": "^9.0.2",
-    "@types/node": "^18.11.9",
-    "lodash": "^4.17.21",
-    "lodash-es": "^4.17.21",
-    "microbundle": "^0.15.1",
-    "mkdirp": "^1.0.4",
-    "prettier": "^2.7.1",
-    "rimraf": "^3.0.2",
-    "rollup": "^3.2.0",
-    "rollup-plugin-dts": "^5.0.0",
-    "ts-node": "^10.9.1",
-    "tslib": "^2.4.1",
-    "typescript": "^4.8.4"
-  },
-  "dependencies": {
-    "ajv": "^8.11.0",
-    "dequal": "^2.0.3"
-  }
+	"name": "@marianmeres/modelize",
+	"version": "1.0.1",
+	"description": "Single utility function `modelize` which proxies your model instance to monitor changes, validate, and more...",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"browser": "./dist/index.umd.js",
+	"exports": {
+		"require": "./dist/index.cjs",
+		"import": "./dist/index.js"
+	},
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"clean": "rimraf dist/*",
+		"prettier": "prettier --write \"{src,tests}/**/*.{js,ts,json}\"",
+		"test": "node --loader ts-node/esm tests/index.ts",
+		"test:watch": "nodemon --delay 0.5 -q --watch \"src/**/*.*\" --watch \"tests/**/*.*\" --exec \"node --loader ts-node/esm tests/index.ts\" --",
+		"release": "release -v minor",
+		"release:patch": "release -v patch",
+		"release:major": "release -v major",
+		"tsc": "tsc",
+		"build": "npm run clean && rollup -c",
+		"dev": "npm run clean && rollup -c -w"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/marianmeres/modelize.git"
+	},
+	"author": "Marian Meres <marian@meres.sk>",
+	"license": "MIT",
+	"bugs": {
+		"url": "https://github.com/marianmeres/modelize/issues"
+	},
+	"homepage": "https://github.com/marianmeres/modelize#readme",
+	"devDependencies": {
+		"@marianmeres/release": "^1.0.0",
+		"@marianmeres/test-runner": "^2.0.13",
+		"@rollup/plugin-commonjs": "^23.0.2",
+		"@rollup/plugin-json": "^5.0.1",
+		"@rollup/plugin-node-resolve": "^15.0.1",
+		"@rollup/plugin-terser": "^0.1.0",
+		"@rollup/plugin-typescript": "^9.0.2",
+		"@types/node": "^18.11.9",
+		"lodash": "^4.17.21",
+		"lodash-es": "^4.17.21",
+		"microbundle": "^0.15.1",
+		"mkdirp": "^1.0.4",
+		"prettier": "^2.7.1",
+		"rimraf": "^3.0.2",
+		"rollup": "^3.2.0",
+		"rollup-plugin-dts": "^5.0.0",
+		"ts-node": "^10.9.1",
+		"tslib": "^2.4.1",
+		"typescript": "^4.8.4"
+	},
+	"dependencies": {
+		"ajv": "^8.11.0",
+		"dequal": "^2.0.3"
+	}
 }
