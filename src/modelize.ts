@@ -16,10 +16,16 @@ export interface ModelizeConfig<T> {
 	validator: Validator<T>;
 }
 
+// this is no good...
+interface FnHydrate<T> {
+	(data?: Partial<Record<keyof T, any>>, forceClean?: boolean): any;
+	(data?: Partial<Record<string, any>>, forceClean?: boolean): any;
+}
+
 // prefixing with "__" to minimize potential name conflicts with <T>
 interface ModelizedMethods<T> {
 	toJSON: () => Record<keyof T, any>;
-	__hydrate: (data?: Partial<Record<keyof T, any>>, forceClean?: boolean) => any;
+	__hydrate: FnHydrate<T>;
 	__isDirty: () => (keyof T)[];
 	__setClean: () => Modelized<T>;
 	__setDirty: (keys: (keyof T)[]) => Modelized<T>;

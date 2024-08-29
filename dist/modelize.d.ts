@@ -4,9 +4,13 @@ export interface ModelizeConfig<T> {
     schema: any;
     validator: Validator<T>;
 }
+interface FnHydrate<T> {
+    (data?: Partial<Record<keyof T, any>>, forceClean?: boolean): any;
+    (data?: Partial<Record<string, any>>, forceClean?: boolean): any;
+}
 interface ModelizedMethods<T> {
     toJSON: () => Record<keyof T, any>;
-    __hydrate: (data?: Partial<Record<keyof T, any>>, forceClean?: boolean) => any;
+    __hydrate: FnHydrate<T>;
     __isDirty: () => (keyof T)[];
     __setClean: () => Modelized<T>;
     __setDirty: (keys: (keyof T)[]) => Modelized<T>;

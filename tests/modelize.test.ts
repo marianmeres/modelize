@@ -324,4 +324,26 @@ suite.test('validators chain', () => {
 	assert(o.code === 7);
 });
 
+suite.test('POJO schema test', () => {
+	try {
+		modelize(
+			{},
+			{ foo: 'bar', baz: 'bat' },
+			{
+				schema: {
+					type: 'object',
+					properties: { foo: { type: 'string' } },
+					// this controls the schema
+					additionalProperties: false,
+				},
+				// this just allows pojo set before validating
+				additionalProperties: true,
+			}
+		);
+		assert(false); // must not be reached
+	} catch (e) {
+		assert(/baz/.test(e.toString()));
+	}
+});
+
 export default suite;
