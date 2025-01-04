@@ -59,8 +59,8 @@ const _validateErrorsToString = (errors) =>
 		}, [])
 		.join(', ');
 
-// @ts-ignore
-const ajv = new Ajv({ strict: false, validateFormats: false });
+// // @ts-ignore
+// const ajv = new Ajv({ strict: false, validateFormats: false });
 
 export function modelize<T extends object>(
 	model: T,
@@ -87,6 +87,9 @@ export function modelize<T extends object>(
 		// if schema was provided, compile validator now (the compilation for the same schema
 		// is cached internally at ajv level, so no worry here)
 		if (_CONFIG.schema) {
+			// @ts-ignore
+			const ajv = new Ajv({ strict: false, validateFormats: false });
+			// @ts-ignore
 			_schemaCompiledValidate = ajv.compile(_CONFIG.schema);
 		} else {
 			_schemaCompiledValidate = null;

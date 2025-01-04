@@ -35,7 +35,7 @@ function getDefaultExportFromCjs (x) {
 }
 
 var ajvExports = {};
-var ajv$1 = {
+var ajv = {
   get exports(){ return ajvExports; },
   set exports(v){ ajvExports = v; },
 };
@@ -6687,7 +6687,7 @@ var require$$3 = {
 	var ref_error_1 = requireRef_error();
 	Object.defineProperty(exports, "MissingRefError", { enumerable: true, get: function () { return ref_error_1.default; } });
 	
-} (ajv$1, ajvExports));
+} (ajv, ajvExports));
 
 var Ajv = /*@__PURE__*/getDefaultExportFromCjs(ajvExports);
 
@@ -6701,7 +6701,6 @@ const _validateErrorsToString = (errors) => (errors || [])
     return memo;
 }, [])
     .join(', ');
-const ajv = new Ajv({ strict: false, validateFormats: false });
 function modelize(model, data = {}, config = {}) {
     if (!isObject(model))
         throw new TypeError('Expecting class instance argument');
@@ -6717,6 +6716,7 @@ function modelize(model, data = {}, config = {}) {
     const _updateConfig = (config) => {
         _CONFIG = { ..._CONFIG, ...config };
         if (_CONFIG.schema) {
+            const ajv = new Ajv({ strict: false, validateFormats: false });
             _schemaCompiledValidate = ajv.compile(_CONFIG.schema);
         }
         else {
