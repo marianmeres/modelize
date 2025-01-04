@@ -63,7 +63,7 @@ suite.test('behavior is strict by default (no additionalProperties)', () => {
 	assert(!o.foo);
 
 	// now non-strict
-	const o2 = modelize({}, null, { additionalProperties: true });
+	const o2 = modelize({}, undefined, { additionalProperties: true });
 	//@ts-ignore
 	o2.foo = 123;
 	//@ts-ignore
@@ -79,7 +79,7 @@ suite.test('behavior is strict by default (no additionalProperties)', () => {
 	assert(!o3.hey);
 
 	//
-	const o4 = modelize({ foo: 'bar' }, null, { additionalProperties: true });
+	const o4 = modelize({ foo: 'bar' }, undefined, { additionalProperties: true });
 	//@ts-ignore
 	o4.hey = 'ho';
 	//@ts-ignore
@@ -255,6 +255,31 @@ suite.test('schema validate works', () => {
 
 	// but explicit validation still throws on schema not available
 	assert.throws(o.__validate, ModelizeUnableToValidate);
+});
+
+suite.test('schema validate works 2', () => {
+	const o = modelize(
+		{},
+		{ firstname: 'James' },
+		{
+			schema: {
+				type: 'object',
+				properties: {
+					firstname: { type: 'string' },
+				},
+				required: ['firstname'],
+				additionalProperties: false,
+			},
+			additionalProperties: true,
+		}
+	);
+
+	// valid
+	assert(o.__validate());
+
+	// setting wrong type must fail
+	//@ts-ignore
+	assert.throws(() => (o.firstname = 123));
 });
 
 suite.test('custom validator works', () => {

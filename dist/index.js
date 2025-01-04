@@ -3883,8 +3883,7 @@ function serialize (cmpts, opts) {
   }
 
   if (options.reference !== 'suffix' && components.scheme) {
-    uriTokens.push(components.scheme);
-    uriTokens.push(':');
+    uriTokens.push(components.scheme, ':');
   }
 
   const authority = recomposeAuthority(components, options);
@@ -3914,13 +3913,11 @@ function serialize (cmpts, opts) {
   }
 
   if (components.query !== undefined) {
-    uriTokens.push('?');
-    uriTokens.push(components.query);
+    uriTokens.push('?', components.query);
   }
 
   if (components.fragment !== undefined) {
-    uriTokens.push('#');
-    uriTokens.push(components.fragment);
+    uriTokens.push('#', components.fragment);
   }
   return uriTokens.join('')
 }
@@ -4017,9 +4014,6 @@ function parse (uri, opts) {
     if (!schemeHandler || (schemeHandler && !schemeHandler.skipNormalize)) {
       if (gotEncoding && parsed.scheme !== undefined) {
         parsed.scheme = unescape(parsed.scheme);
-      }
-      if (gotEncoding && parsed.userinfo !== undefined) {
-        parsed.userinfo = unescape(parsed.userinfo);
       }
       if (gotEncoding && parsed.host !== undefined) {
         parsed.host = unescape(parsed.host);
