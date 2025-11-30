@@ -43,7 +43,7 @@ user.name; // 'John'
 - **Svelte-compatible** - works with `$` auto-subscription
 - **Lightweight** - minimal API, no magic
 
-## API
+## Main API
 
 ### `modelize(source, options?)`
 
