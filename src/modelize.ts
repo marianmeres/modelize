@@ -1,308 +1,298 @@
-import { isObject } from './object-utils.js';
-import { createPubSub } from './create-pub-sub.js';
-import Ajv from 'ajv';
+import { createPubSub } from "@marianmeres/pubsub";
+import { Ajv, type ErrorObject, type ValidateFunction } from "ajv";
 
-const clog = console.log;
+// Types
+export type JSONSchema = Record<string, unknown>;
 
-type Validator<T> = (model: T, schema, assert?: boolean) => boolean;
-
-export interface ModelizeConfig<T> {
-	// whether to allow setting of unknown properties (this is checked regardless of schema,
-	// just using the same naming convention)
-	additionalProperties: boolean;
-	// tsconfig.json strictNullChecks must be enabled to use JSONSchemaType
-	// schema: JSONSchemaType<T>;
-	schema: any;
-	validator: Validator<T>;
+export interface ModelizeOptions<T extends object> {
+	/** JSON Schema for validation */
+	schema?: JSONSchema;
+	/** Custom validator function - return true if valid, or error message string */
+	validate?: (model: T) => true | string;
+	/** If false, allow properties not present in original source (default: true) */
+	strict?: boolean;
 }
 
-// this is no good...
-interface FnHydrate<T> {
-	(data?: Partial<Record<keyof T, any>>, forceClean?: boolean): any;
-	(data?: Partial<Record<string, any>>, forceClean?: boolean): any;
+export interface ValidationError {
+	path: string;
+	message: string;
 }
 
-// prefixing with "__" to minimize potential name conflicts with <T>
-interface ModelizedMethods<T> {
-	toJSON: () => Record<keyof T, any>;
-	__hydrate: FnHydrate<T>;
-	__isDirty: () => (keyof T)[];
-	__setClean: () => Modelized<T>;
-	__setDirty: (keys: (keyof T)[]) => Modelized<T>;
-	__getDirty: () => Partial<Record<keyof T, any>>;
-	__validate: (assert?: boolean) => boolean;
-	__setSchema: (schema: any) => Modelized<T>;
-	__getSchema: () => any;
-	__setValidator: (validator: Validator<T>) => Modelized<T>;
-	__getValidator: () => Validator<T>;
-	__setAllowAdditionalProps: (flag: boolean) => Modelized<T>;
-	__onChange: (
-		cb: (model: T, changed: { property: keyof T; old: any; new: any }) => any
-	) => Function;
-	// for data hackings... subject of change
-	__pauseValidate: () => Modelized<T>;
-	__resumeValidate: () => Modelized<T>;
-	//
-	__model: () => T;
+export class ModelizeValidationError extends Error {
+	constructor(
+		message: string,
+		public errors: ValidationError[] = [],
+	) {
+		super(message);
+		this.name = "ModelizeValidationError";
+	}
 }
 
-export type Modelized<T> = T & ModelizedMethods<T>;
+export interface ModelizedMethods<T extends object> {
+	/** Set of dirty property keys (empty when clean) */
+	readonly __dirty: Set<keyof T>;
+	/** True if any property has been modified */
+	readonly __isDirty: boolean;
+	/** True if model passes validation (non-throwing check) */
+	readonly __isValid: boolean;
+	/** The original unwrapped source object */
+	readonly __source: T;
+	/** Initial snapshot for reset */
+	readonly __initial: T;
+	/** Last validation errors (empty if valid) */
+	readonly __errors: ValidationError[];
+	/** Validate the model - throws ModelizeValidationError if invalid, returns true if valid */
+	__validate(): true;
+	/** Clear dirty state */
+	__reset(): void;
+	/** Reset all properties to initial values and clear dirty state */
+	__resetToInitial(): void;
+	/** Bulk update properties */
+	__hydrate(data: Partial<T>, options?: { resetDirty?: boolean }): void;
+	/** Svelte-compatible subscribe */
+	subscribe(callback: (model: Modelized<T>) => void): () => void;
+}
 
-export class ModelizeUnableToValidate extends Error {}
-export class ModelizeValidationError extends Error {}
+export type Modelized<T extends object> = T & ModelizedMethods<T>;
 
-const _validateErrorsToString = (errors) =>
-	(errors || [])
-		.reduce((memo, e) => {
-			memo.push(`${e.schemaPath} ${e.message} ${JSON.stringify(e.params)}`);
-			return memo;
-		}, [])
-		.join(', ');
+// AJV instance (lazy initialized)
+let ajv: Ajv | null = null;
 
-// // @ts-ignore
-// const ajv = new Ajv({ strict: false, validateFormats: false });
+function getAjv(): Ajv {
+	if (!ajv) {
+		ajv = new Ajv({ allErrors: true });
+	}
+	return ajv;
+}
 
+function ajvErrorsToValidationErrors(
+	errors: ErrorObject[] | null | undefined,
+): ValidationError[] {
+	if (!errors) return [];
+	return errors.map((e) => ({
+		path: e.instancePath || "/",
+		message: e.message || "Unknown validation error",
+	}));
+}
+
+function deepClone<T>(obj: T): T {
+	if (obj === null || typeof obj !== "object") return obj;
+	if (Array.isArray(obj)) return obj.map(deepClone) as T;
+	const cloned = {} as T;
+	for (const key in obj) {
+		if (Object.prototype.hasOwnProperty.call(obj, key)) {
+			cloned[key] = deepClone(obj[key]);
+		}
+	}
+	return cloned;
+}
+
+// Reserved method names that cannot be used as model properties
+const RESERVED_NAMES = new Set([
+	"__dirty",
+	"__isDirty",
+	"__isValid",
+	"__source",
+	"__initial",
+	"__errors",
+	"__validate",
+	"__reset",
+	"__resetToInitial",
+	"__hydrate",
+	"subscribe",
+]);
+
+/**
+ * Wraps a source object with a proxy that tracks changes, supports validation,
+ * and provides a Svelte-compatible subscribe method.
+ */
 export function modelize<T extends object>(
-	model: T,
-	data: Partial<Record<keyof T, any>> = {},
-	config: Partial<ModelizeConfig<T>> = {}
+	source: T,
+	options: ModelizeOptions<T> = {},
 ): Modelized<T> {
-	// sanity
-	if (!isObject(model)) throw new TypeError('Expecting class instance argument');
+	const { schema, validate: customValidator, strict = true } = options;
 
-	const isFn = (v) => typeof v === 'function';
-
-	// defaults
-	let _CONFIG: ModelizeConfig<T> = {
-		...({
-			additionalProperties: false,
-			schema: null,
-			validator: null,
-		} as ModelizeConfig<T>),
-	};
-
-	let _schemaCompiledValidate;
-	const _updateConfig = (config: Partial<ModelizeConfig<T>>) => {
-		_CONFIG = { ..._CONFIG, ...config };
-		// if schema was provided, compile validator now (the compilation for the same schema
-		// is cached internally at ajv level, so no worry here)
-		if (_CONFIG.schema) {
-			// @ts-ignore
-			const ajv = new Ajv({ strict: false, validateFormats: false });
-			// @ts-ignore
-			_schemaCompiledValidate = ajv.compile(_CONFIG.schema);
-		} else {
-			_schemaCompiledValidate = null;
-		}
-	};
-
-	// set now
-	_updateConfig({
-		// support for special case getter `__config` at model level
-		...((model as any).__config || {}),
-		// and via param
-		...(config || {}),
-	});
-
-	// pub/sub with helper pause flag for "construct" time
-	const _pubsub = createPubSub();
-	let _doPublishChange = false;
-
-	// collection of dirty (changed) keys
-	const _dirty = new Set<keyof T>();
-
-	// helper flag to pause/resume validation
-	let _doValidate = true;
-
-	//
-	const _validateSchema = (assert: boolean = true) => {
-		if (!_schemaCompiledValidate) {
-			throw new Error('Unknown error... schema validator not available');
-		}
-		const valid = _schemaCompiledValidate(model);
-		if (valid) return true;
-		if (assert) {
-			throw new ModelizeValidationError(
-				_validateErrorsToString(_schemaCompiledValidate.errors)
+	// Validate that source doesn't use reserved names
+	for (const key of Object.keys(source)) {
+		if (RESERVED_NAMES.has(key)) {
+			throw new Error(
+				`Property "${key}" is reserved and cannot be used in modelized objects`,
 			);
 		}
-		return false;
-	};
+	}
 
-	//
-	const _validateOnlyIfValidatorOrSchema = (model: T) => {
-		if (!_doValidate) return true;
-		let valid = true;
-		if (_CONFIG.schema) valid = _validateSchema(true);
-		if (valid && isFn(_CONFIG.validator)) {
-			valid = _CONFIG.validator(model, _CONFIG.schema, true);
-		}
-		// if we're still here invalid, we have now 2 issues:
-		if (!valid) {
-			throw new ModelizeValidationError(
-				`Model is not valid! (Additionally, custom validator error detected as well.)`
-			);
-		}
-		return valid;
-	};
+	// Internal state
+	const dirty = new Set<keyof T>();
+	const initial = deepClone(source);
+	let lastErrors: ValidationError[] = [];
 
-	//
-	const set = (target: T, prop, value, receiver: T) => {
-		_assertNonCollidingPropName(prop);
-		if (_CONFIG.additionalProperties || Reflect.has(target, prop)) {
-			const old = Reflect.get(target, prop, receiver);
-			const success = Reflect.set(target, prop, value, receiver);
-			if (success && value !== old) {
-				try {
-					_validateOnlyIfValidatorOrSchema(target);
-				} catch (e) {
-					// undo... (this is kind of ugly)
-					Reflect.set(target, prop, old, receiver);
-					throw e;
+	// Pub/sub for change notifications
+	const pubsub = createPubSub();
+	const CHANGE_EVENT = "change";
+
+	// Compiled schema validator (lazy)
+	let compiledValidator: ValidateFunction | null = null;
+
+	function getCompiledValidator(): ValidateFunction | null {
+		if (schema && !compiledValidator) {
+			compiledValidator = getAjv().compile(schema);
+		}
+		return compiledValidator;
+	}
+
+	// Validation logic
+	function doValidate(): { valid: boolean; errors: ValidationError[] } {
+		const errors: ValidationError[] = [];
+
+		// JSON Schema validation
+		const validator = getCompiledValidator();
+		if (validator) {
+			const valid = validator(source);
+			if (!valid) {
+				errors.push(...ajvErrorsToValidationErrors(validator.errors));
+			}
+		}
+
+		// Custom validator
+		if (customValidator) {
+			const result = customValidator(source as T);
+			if (result !== true) {
+				errors.push({ path: "/", message: result });
+			}
+		}
+
+		return { valid: errors.length === 0, errors };
+	}
+
+	// Notify subscribers
+	function notify() {
+		pubsub.publish(CHANGE_EVENT, proxy);
+	}
+
+	// The proxy handler
+	const handler: ProxyHandler<T> = {
+		get(target, prop, receiver) {
+			// Handle our special methods/properties first
+			switch (prop) {
+				case "__dirty":
+					return dirty;
+				case "__isDirty":
+					return dirty.size > 0;
+				case "__isValid": {
+					const { valid, errors } = doValidate();
+					lastErrors = errors;
+					return valid;
 				}
-				_dirty.add(prop);
-				_doPublishChange &&
-					_pubsub.publish('change', {
-						model: target,
-						changed: { property: prop, old, new: value },
-					});
+				case "__source":
+					return target;
+				case "__initial":
+					return initial;
+				case "__errors":
+					return lastErrors;
+				case "__validate":
+					return () => {
+						const { valid, errors } = doValidate();
+						lastErrors = errors;
+						if (!valid) {
+							throw new ModelizeValidationError(
+								"Validation failed",
+								errors,
+							);
+						}
+						return true;
+					};
+				case "__reset":
+					return () => {
+						dirty.clear();
+						notify();
+					};
+				case "__resetToInitial":
+					return () => {
+						for (const key in initial) {
+							if (Object.prototype.hasOwnProperty.call(initial, key)) {
+								(target as Record<string, unknown>)[key] = deepClone(
+									initial[key],
+								);
+							}
+						}
+						dirty.clear();
+						notify();
+					};
+				case "__hydrate":
+					return (data: Partial<T>, opts?: { resetDirty?: boolean }) => {
+						for (const key in data) {
+							if (Object.prototype.hasOwnProperty.call(data, key)) {
+								if (strict && !(key in target)) {
+									throw new Error(
+										`Property "${key}" does not exist on model (strict mode enabled)`,
+									);
+								}
+								const oldValue = (target as Record<string, unknown>)[key];
+								const newValue = data[key];
+								(target as Record<string, unknown>)[key] = newValue;
+								if (oldValue !== newValue) {
+									dirty.add(key as keyof T);
+								}
+							}
+						}
+						if (opts?.resetDirty) {
+							dirty.clear();
+						}
+						notify();
+					};
+				case "subscribe":
+					return (callback: (model: Modelized<T>) => void) => {
+						// Svelte contract: call immediately with current value
+						callback(proxy);
+						return pubsub.subscribe(CHANGE_EVENT, callback);
+					};
 			}
-			return success;
-		}
-		return true;
-	};
 
-	// technically we could just mix it in via `Object.assign(model, methodsMixin)`... but those
-	// methods would become enumerable (which is not desired) so we'll just else-if it in
-	// the proxy trap below
-	const methodsMixin: ModelizedMethods<T> = {
-		//
-		toJSON: (): Record<keyof T, any> =>
-			Object.entries(model).reduce((m, [k, v]) => ({ ...m, [k]: v }), {} as T),
-		//
-		__hydrate: (data, forceClean = false) => {
-			for (let k in data || {}) set(model, k, data[k], model as any);
-			forceClean && _dirty.clear();
-			return model as Modelized<T>;
+			// Default: access the target property
+			return Reflect.get(target, prop, receiver);
 		},
-		//
-		__isDirty: () => (_dirty.size ? Array.from(_dirty) : null),
-		//
-		__setClean: () => {
-			_dirty.clear();
-			return model as Modelized<T>;
-		},
-		//
-		__setDirty: (keys: (keyof T)[] = null) => {
-			methodsMixin.__setClean();
-			(keys || Object.keys(model)).forEach((k) => k in model && _dirty.add(k));
-			return model as Modelized<T>;
-		},
-		//
-		__getDirty: () => {
-			return (methodsMixin.__isDirty() || []).reduce(
-				(m, k) => ({ ...m, [k]: model[k] }),
-				{}
-			);
-		},
-		//
-		__validate: (assert: boolean = true) => {
-			if (!_doValidate) return true;
 
-			let valid = true;
-			let wasValidated = 0;
+		set(target, prop, value, receiver) {
+			const key = prop as string;
 
-			// if we have a schema, validate it first
-			if (_CONFIG.schema) {
-				valid = _validateSchema(assert);
-				wasValidated++;
+			// Prevent setting reserved properties
+			if (RESERVED_NAMES.has(key)) {
+				throw new Error(`Cannot set reserved property "${key}"`);
 			}
 
-			// if we have a custom validator, continue with it as well
-			if (valid && isFn(_CONFIG.validator)) {
-				valid = _CONFIG.validator(model as Modelized<T>, _CONFIG.schema, assert);
-				wasValidated++;
-			}
-
-			// explicitly calling `__validate` without any internal validation available?!?
-			if (!wasValidated && assert) {
-				throw new ModelizeUnableToValidate(
-					'Unable to validate! Neither `validator` nor `schema` were provided.'
+			// Strict mode check
+			if (strict && !(key in target)) {
+				throw new Error(
+					`Property "${key}" does not exist on model (strict mode enabled)`,
 				);
 			}
 
-			return valid;
-		},
-		//
-		__setSchema: (schema: any) => {
-			_updateConfig({ schema });
-			return model as Modelized<T>;
-		},
-		//
-		__getSchema: () => _CONFIG.schema,
-		//
-		__setValidator: (validator: Validator<T>) => {
-			_updateConfig({ validator });
-			return model as Modelized<T>;
-		},
-		//
-		__getValidator: () => _CONFIG.validator,
-		//
-		__setAllowAdditionalProps: (flag: boolean) => {
-			_updateConfig({ additionalProperties: !!flag });
-			return model as Modelized<T>;
-		},
-		//
-		__onChange: (cb) =>
-			_pubsub.subscribe('change', ({ model, changed }) => cb(model, changed)),
-		//
-		__pauseValidate: () => {
-			_doValidate = false;
-			return model as Modelized<T>;
-		},
-		//
-		__resumeValidate: () => {
-			_doValidate = true;
-			return model as Modelized<T>;
-		},
-		//
-		__model: () => model,
-	};
+			const oldValue = (target as Record<string, unknown>)[key];
+			const success = Reflect.set(target, prop, value, receiver);
 
-	const _assertNonCollidingPropName = (name) => {
-		if (methodsMixin[name]) {
-			throw new TypeError(`'${name}' is a reserved modelized method name!`);
-		}
-	};
-
-	//
-	Object.keys(model).forEach(_assertNonCollidingPropName);
-
-	// final proxy
-	const modelized = new Proxy<T>(model, {
-		get(target, prop, receiver) {
-			const value = Reflect.get(target, prop, receiver);
-			if (isFn(value)) {
-				return (...args) => (value as any).apply(target, args);
-			} else if (methodsMixin[prop]) {
-				return (...args) => methodsMixin[prop].apply(target, args);
-			} else {
-				return value;
+			if (success && oldValue !== value) {
+				dirty.add(key as keyof T);
+				notify();
 			}
+
+			return success;
 		},
-		set,
-	}) as Modelized<T>;
 
-	// if data were provided, hydrate now, set clean afterwards
-	if (data) {
-		modelized.__hydrate(data);
-		// makes no sense to be dirty at "construct" time (if not desired, simply `__setDirty`)
-		modelized.__setClean();
-	}
+		// Prevent deleting properties in strict mode
+		deleteProperty(target, prop) {
+			if (strict) {
+				throw new Error(
+					`Cannot delete property "${String(prop)}" (strict mode enabled)`,
+				);
+			}
+			const success = Reflect.deleteProperty(target, prop);
+			if (success) {
+				notify();
+			}
+			return success;
+		},
+	};
 
-	// from now on, publish changes
-	_doPublishChange = true;
-
-	//
-	return modelized;
+	const proxy = new Proxy(source, handler) as Modelized<T>;
+	return proxy;
 }
