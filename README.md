@@ -368,3 +368,10 @@ __validate, __reset, __resetToInitial, __hydrate, subscribe
 ## License
 
 MIT
+
+## Package Identity
+
+- **Name:** @marianmeres/modelize
+- **Author:** Marian Meres
+- **Repository:** https://github.com/marianmeres/modelize
+- **License:** MIT
