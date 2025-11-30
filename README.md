@@ -1,5 +1,8 @@
 # @marianmeres/modelize
 
+[![NPM version](https://img.shields.io/npm/v/@marianmeres/modelize.svg)](https://www.npmjs.com/package/@marianmeres/modelize)
+[![JSR version](https://jsr.io/badges/@marianmeres/modelize)](https://jsr.io/@marianmeres/modelize)
+
 A lightweight utility that wraps any object with a proxy to track changes, validate, and
 provide Svelte-compatible reactivity.
 
