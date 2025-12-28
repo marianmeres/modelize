@@ -2,6 +2,7 @@
 
 [![NPM version](https://img.shields.io/npm/v/@marianmeres/modelize.svg)](https://www.npmjs.com/package/@marianmeres/modelize)
 [![JSR version](https://jsr.io/badges/@marianmeres/modelize)](https://jsr.io/@marianmeres/modelize)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A lightweight utility that wraps any object with a proxy to track changes, validate, and
 provide Svelte-compatible reactivity.
@@ -233,148 +234,8 @@ Svelte store contract (allowing `$model` auto-subscription syntax).
 
 ---
 
-## API Reference
-
-Complete API specification
-
-### Function: `modelize<T>(source, options?)`
-
-```typescript
-function modelize<T extends object>(
-	source: T,
-	options?: ModelizeOptions<T>,
-): Modelized<T>;
-```
-
-Wraps `source` with a Proxy providing dirty tracking, validation, and Svelte-compatible
-reactivity.
-
-**Parameters:**
-
-- `source: T` - Object to wrap (plain object or class instance)
-- `options?: ModelizeOptions<T>` - Optional configuration
-
-**Returns:** `Modelized<T>` - Proxy combining `T` with `ModelizedMethods<T>`
-
-**Throws:**
-
-- `Error` if source contains reserved property names
-- `Error` if strict mode enabled and adding/deleting properties
-
----
-
-### Interface: `ModelizeOptions<T>`
-
-```typescript
-interface ModelizeOptions<T extends object> {
-	schema?: JSONSchema;
-	validate?: (model: T) => true | string;
-	strict?: boolean;
-}
-```
-
-| Property   | Type                          | Default | Description                                       |
-| ---------- | ----------------------------- | ------- | ------------------------------------------------- |
-| `schema`   | `JSONSchema`                  | -       | JSON Schema for validation (AJV)                  |
-| `validate` | `(model: T) => true \| string` | -       | Custom validator; return `true` or error message  |
-| `strict`   | `boolean`                     | `true`  | Prevent adding/deleting properties                |
-
----
-
-### Interface: `ModelizedMethods<T>`
-
-Properties and methods added to the wrapped object.
-
-#### Read-only Properties
-
-| Property     | Type                | Description                                         |
-| ------------ | ------------------- | --------------------------------------------------- |
-| `__dirty`    | `Set<keyof T>`      | Set of modified property keys; empty when clean     |
-| `__isDirty`  | `boolean`           | `true` if `__dirty.size > 0`                        |
-| `__isValid`  | `boolean`           | `true` if validation passes; triggers validation    |
-| `__errors`   | `ValidationError[]` | Errors from last validation; empty if valid         |
-| `__source`   | `T`                 | Reference to original unwrapped object              |
-| `__initial`  | `T`                 | Deep clone of original values at creation           |
-
-#### Methods
-
-| Method                                                    | Returns      | Description                                      |
-| --------------------------------------------------------- | ------------ | ------------------------------------------------ |
-| `__validate()`                                            | `true`       | Throws `ModelizeValidationError` if invalid      |
-| `__reset()`                                               | `void`       | Clears dirty state; values unchanged             |
-| `__resetToInitial()`                                      | `void`       | Restores initial values; clears dirty state      |
-| `__hydrate(data: Partial<T>, opts?: {resetDirty?: bool})` | `void`       | Bulk update with single notification             |
-| `subscribe(cb: (model: Modelized<T>) => void)`            | `() => void` | Svelte-compatible subscription; returns unsub fn |
-
----
-
-### Interface: `ValidationError`
-
-```typescript
-interface ValidationError {
-	path: string;
-	message: string;
-}
-```
-
-| Property  | Type     | Description                                    |
-| --------- | -------- | ---------------------------------------------- |
-| `path`    | `string` | JSON Pointer to invalid property (e.g., `/age`) |
-| `message` | `string` | Human-readable error description               |
-
----
-
-### Class: `ModelizeValidationError`
-
-```typescript
-class ModelizeValidationError extends Error {
-	constructor(message: string, errors?: ValidationError[]);
-	errors: ValidationError[];
-}
-```
-
-Thrown by `__validate()` when validation fails. Contains all field-level errors.
-
----
-
-### Type: `Modelized<T>`
-
-```typescript
-type Modelized<T extends object> = T & ModelizedMethods<T>;
-```
-
-Intersection type combining source object type with framework methods.
-
----
-
-### Type: `JSONSchema`
-
-```typescript
-type JSONSchema = Record<string, unknown>;
-```
-
-JSON Schema object for AJV validation.
-
----
-
-### Reserved Property Names
-
-The following names cannot be used as properties in source objects:
-
-```
-__dirty, __isDirty, __isValid, __source, __initial, __errors,
-__validate, __reset, __resetToInitial, __hydrate, subscribe
-```
-
----
+For complete API specification, see [API.md](./API.md).
 
 ## License
 
 MIT
-
-## Package Identity
-
-- **Name:** @marianmeres/modelize
-- **Author:** Marian Meres
-- **Repository:** https://github.com/marianmeres/modelize
-- **License:** MIT
