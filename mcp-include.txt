@@ -1,0 +1,1 @@
+Lightweight proxy wrapper for JS/TS objects providing dirty tracking, JSON Schema validation (AJV), and Svelte store compatibility. Wraps any object with ES6 Proxy to intercept get/set, track changed properties, and notify subscribers reactively.

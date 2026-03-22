@@ -3,7 +3,7 @@
 ## Package Identity
 
 - **Name**: `@marianmeres/modelize`
-- **Version**: 2.0.2
+- **Version**: 2.0.3
 - **License**: MIT
 - **Registry**: JSR (primary), NPM (secondary)
 - **Runtime**: Deno, Node.js, Browser
