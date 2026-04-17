@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { modelize, ModelizeValidationError } from "../src/mod.ts";
+import { isModelized, modelize, ModelizeValidationError } from "../src/mod.ts";
 
 // -----------------------------------------------------------------------------
 // Basic proxy behavior
@@ -156,7 +156,7 @@ Deno.test("__hydrate throws for unknown props in strict mode", () => {
 	assertThrows(
 		() => model.__hydrate({ unknown: "value" } as any),
 		Error,
-		"does not exist on model"
+		"does not exist on model",
 	);
 });
 
@@ -180,7 +180,7 @@ Deno.test("strict mode prevents adding new properties", () => {
 			(model as any).newProp = "value";
 		},
 		Error,
-		"does not exist on model"
+		"does not exist on model",
 	);
 });
 
@@ -200,7 +200,7 @@ Deno.test("strict mode prevents deleting properties", () => {
 			delete (model as any).name;
 		},
 		Error,
-		"strict mode enabled"
+		"strict mode enabled",
 	);
 });
 
@@ -230,7 +230,7 @@ Deno.test("JSON schema validation passes for valid data", () => {
 					age: { type: "number", minimum: 0 },
 				},
 			},
-		}
+		},
 	);
 
 	assertEquals(model.__isValid, true);
@@ -246,7 +246,7 @@ Deno.test("JSON schema validation fails for invalid data", () => {
 					age: { type: "number", minimum: 0 },
 				},
 			},
-		}
+		},
 	);
 
 	assertEquals(model.__isValid, false);
@@ -263,13 +263,13 @@ Deno.test("__validate throws ModelizeValidationError for invalid data", () => {
 					age: { type: "number", minimum: 0 },
 				},
 			},
-		}
+		},
 	);
 
 	assertThrows(
 		() => model.__validate(),
 		ModelizeValidationError,
-		"Validation failed"
+		"Validation failed",
 	);
 });
 
@@ -284,7 +284,7 @@ Deno.test("validation error contains field-level details", () => {
 					name: { type: "string" },
 				},
 			},
-		}
+		},
 	);
 
 	try {
@@ -295,8 +295,8 @@ Deno.test("validation error contains field-level details", () => {
 		assert(e.errors.length >= 1);
 		assert(
 			e.errors.some(
-				(err) => err.path.includes("age") || err.message.includes("minimum")
-			)
+				(err) => err.path.includes("age") || err.message.includes("minimum"),
+			),
 		);
 	}
 });
@@ -311,7 +311,7 @@ Deno.test("custom validator passes when returning true", () => {
 		{
 			validate: (m) =>
 				m.password === m.confirmPassword ? true : "Passwords must match",
-		}
+		},
 	);
 
 	assertEquals(model.__isValid, true);
@@ -323,7 +323,7 @@ Deno.test("custom validator fails when returning error message", () => {
 		{
 			validate: (m) =>
 				m.password === m.confirmPassword ? true : "Passwords must match",
-		}
+		},
 	);
 
 	assertEquals(model.__isValid, false);
@@ -344,7 +344,7 @@ Deno.test("both schema and custom validator can be used together", () => {
 				m.status === "active" || m.status === "inactive"
 					? true
 					: "Status must be active or inactive",
-		}
+		},
 	);
 
 	assertEquals(model.__isValid, false);
@@ -452,7 +452,7 @@ Deno.test("cannot set reserved property", () => {
 			(model as any).__dirty = new Set();
 		},
 		Error,
-		"reserved"
+		"reserved",
 	);
 });
 
@@ -510,4 +510,388 @@ Deno.test("Object.keys returns source keys only", () => {
 	const keys = Object.keys(model);
 
 	assertEquals(keys.sort(), ["age", "name"]);
+});
+
+// -----------------------------------------------------------------------------
+// Regression: __hydrate atomicity (strict mode)
+// -----------------------------------------------------------------------------
+
+Deno.test("__hydrate is atomic under strict: unknown key rejects before mutation", () => {
+	const model = modelize({ name: "John", age: 30 });
+
+	assertThrows(
+		() =>
+			model.__hydrate({
+				name: "Jane",
+				bogus: "x",
+			} as never),
+		Error,
+		"does not exist on model",
+	);
+
+	// Neither legal nor illegal keys should have been applied.
+	assertEquals(model.name, "John");
+	assertEquals(model.age, 30);
+	assertEquals(model.__isDirty, false);
+});
+
+Deno.test("__hydrate({ validate: true }) rejects invalid candidate without mutation", () => {
+	const model = modelize(
+		{ age: 10 },
+		{
+			schema: {
+				type: "object",
+				properties: { age: { type: "number", minimum: 0 } },
+			},
+		},
+	);
+
+	assertThrows(
+		() => model.__hydrate({ age: -5 }, { validate: true }),
+		ModelizeValidationError,
+	);
+
+	assertEquals(model.age, 10); // unchanged
+	assertEquals(model.__isDirty, false);
+});
+
+Deno.test("__hydrate({ validate: true }) applies when valid", () => {
+	const model = modelize(
+		{ age: 10 },
+		{
+			schema: {
+				type: "object",
+				properties: { age: { type: "number", minimum: 0 } },
+			},
+		},
+	);
+
+	model.__hydrate({ age: 20 }, { validate: true });
+	assertEquals(model.age, 20);
+	assert(model.__dirty.has("age"));
+});
+
+// -----------------------------------------------------------------------------
+// Regression: __hydrate notification gating
+// -----------------------------------------------------------------------------
+
+Deno.test("__hydrate does NOT notify when nothing changed", () => {
+	const model = modelize({ name: "John", age: 30 });
+	let calls = 0;
+	model.subscribe(() => calls++);
+
+	// Initial call only.
+	assertEquals(calls, 1);
+
+	model.__hydrate({ name: "John" }); // same value
+	assertEquals(calls, 1);
+
+	model.__hydrate({}); // empty
+	assertEquals(calls, 1);
+});
+
+// -----------------------------------------------------------------------------
+// Regression: __reset / __resetToInitial notification gating
+// -----------------------------------------------------------------------------
+
+Deno.test("__reset does NOT notify when already clean", () => {
+	const model = modelize({ name: "John" });
+	let calls = 0;
+	model.subscribe(() => calls++);
+
+	assertEquals(calls, 1);
+
+	model.__reset(); // already clean
+	assertEquals(calls, 1);
+});
+
+Deno.test("__resetToInitial does NOT notify when already at initial", () => {
+	const model = modelize({ name: "John" });
+	let calls = 0;
+	model.subscribe(() => calls++);
+
+	assertEquals(calls, 1);
+
+	model.__resetToInitial();
+	assertEquals(calls, 1);
+});
+
+// -----------------------------------------------------------------------------
+// Regression: __resetToInitial with non-strict extras
+// -----------------------------------------------------------------------------
+
+Deno.test("__resetToInitial removes extra keys in non-strict mode", () => {
+	const model = modelize({ name: "John" }, { strict: false });
+	(model as any).extra = "value";
+
+	assertEquals((model as any).extra, "value");
+
+	model.__resetToInitial();
+
+	assertEquals((model as any).extra, undefined);
+	assertEquals(Object.keys(model).sort(), ["name"]);
+	assertEquals(model.__isDirty, false);
+});
+
+// -----------------------------------------------------------------------------
+// Regression: delete marks dirty (non-strict mode)
+// -----------------------------------------------------------------------------
+
+Deno.test("delete marks property dirty in non-strict mode", () => {
+	const model = modelize({ name: "John" }, { strict: false });
+
+	delete (model as any).name;
+
+	assert(model.__dirty.has("name"));
+	assertEquals(model.__isDirty, true);
+});
+
+Deno.test("delete of non-existent property does not notify or mark dirty", () => {
+	const model = modelize({ name: "John" }, { strict: false });
+	let calls = 0;
+	model.subscribe(() => calls++);
+
+	delete (model as any).nonExistent;
+
+	assertEquals(calls, 1); // only initial
+	assertEquals(model.__isDirty, false);
+});
+
+// -----------------------------------------------------------------------------
+// Regression: `has` trap for reserved names
+// -----------------------------------------------------------------------------
+
+Deno.test("'in' operator returns true for reserved names", () => {
+	const model = modelize({ name: "John" });
+
+	assert("__dirty" in model);
+	assert("__isDirty" in model);
+	assert("__isValid" in model);
+	assert("__source" in model);
+	assert("__initial" in model);
+	assert("__errors" in model);
+	assert("__validate" in model);
+	assert("__reset" in model);
+	assert("__resetToInitial" in model);
+	assert("__hydrate" in model);
+	assert("subscribe" in model);
+	assert("subscribeKey" in model);
+
+	assert("name" in model);
+	assert(!("missing" in model));
+});
+
+// -----------------------------------------------------------------------------
+// Regression: __errors auto-refreshes
+// -----------------------------------------------------------------------------
+
+Deno.test("__errors is consistent with current state without calling __isValid first", () => {
+	const model = modelize(
+		{ age: 10 },
+		{
+			schema: {
+				type: "object",
+				properties: { age: { type: "number", minimum: 0 } },
+			},
+		},
+	);
+
+	// Initially valid.
+	assertEquals(model.__errors, []);
+
+	model.age = -5;
+	// Accessing __errors directly (without __isValid) should reflect current state.
+	assert(model.__errors.length > 0);
+});
+
+Deno.test("__errors exposes AJV keyword and params", () => {
+	const model = modelize(
+		{ age: -5 },
+		{
+			schema: {
+				type: "object",
+				properties: { age: { type: "number", minimum: 0 } },
+			},
+		},
+	);
+
+	const errs = model.__errors;
+	assert(errs.length > 0);
+	assertEquals(errs[0].keyword, "minimum");
+	assert(errs[0].params && typeof errs[0].params === "object");
+});
+
+// -----------------------------------------------------------------------------
+// ModelizeValidationError
+// -----------------------------------------------------------------------------
+
+Deno.test("ModelizeValidationError.errors is readonly at type level", () => {
+	const err = new ModelizeValidationError("msg", [{ path: "/", message: "x" }]);
+	// @ts-expect-error readonly
+	err.errors = [];
+	// Runtime still allows it (JS has no hard readonly), but the contract is documented.
+	// Ensure errors array is propagated correctly.
+	assertEquals(err.name, "ModelizeValidationError");
+});
+
+// -----------------------------------------------------------------------------
+// Deep clone: Date, Map, Set, cycles
+// -----------------------------------------------------------------------------
+
+Deno.test("__initial preserves Date values via structuredClone", () => {
+	const now = new Date("2024-01-01T00:00:00Z");
+	const model = modelize({ at: now });
+
+	model.at = new Date("2030-01-01T00:00:00Z");
+	model.__resetToInitial();
+
+	assert(model.at instanceof Date);
+	assertEquals(model.at.getTime(), now.getTime());
+});
+
+Deno.test("__resetToInitial restores Map/Set values", () => {
+	const model = modelize({
+		tags: new Set(["a", "b"]),
+		meta: new Map([["k", 1]]),
+	});
+
+	model.tags = new Set(["x"]);
+	model.meta = new Map([["other", 2]]);
+
+	model.__resetToInitial();
+
+	assert(model.tags instanceof Set);
+	assertEquals([...model.tags].sort(), ["a", "b"]);
+	assert(model.meta instanceof Map);
+	assertEquals(model.meta.get("k"), 1);
+});
+
+// -----------------------------------------------------------------------------
+// clone option
+// -----------------------------------------------------------------------------
+
+Deno.test("{ clone: true } does not mutate caller's source", () => {
+	const source = { name: "John", age: 30 };
+	const model = modelize(source, { clone: true });
+
+	model.name = "Jane";
+
+	assertEquals(source.name, "John"); // not mutated
+	assert(model.__source !== source); // internal clone
+	assertEquals(model.__source.name, "Jane");
+});
+
+// -----------------------------------------------------------------------------
+// subscribeKey
+// -----------------------------------------------------------------------------
+
+Deno.test("subscribeKey fires only for the watched key", () => {
+	const model = modelize({ name: "John", age: 30 });
+
+	const nameChanges: [string, string][] = [];
+	const ageChanges: [number, number][] = [];
+
+	model.subscribeKey("name", (v, p) => nameChanges.push([v, p]));
+	model.subscribeKey("age", (v, p) => ageChanges.push([v, p]));
+
+	model.name = "Jane";
+	assertEquals(nameChanges, [["Jane", "John"]]);
+	assertEquals(ageChanges, []);
+
+	model.age = 31;
+	assertEquals(nameChanges.length, 1);
+	assertEquals(ageChanges, [[31, 30]]);
+});
+
+Deno.test("subscribeKey unsubscribes cleanly", () => {
+	const model = modelize({ name: "John" });
+	let calls = 0;
+	const off = model.subscribeKey("name", () => calls++);
+
+	model.name = "A";
+	off();
+	model.name = "B";
+
+	assertEquals(calls, 1);
+});
+
+Deno.test("subscribeKey fires on __hydrate for changed keys only", () => {
+	const model = modelize({ name: "John", age: 30 });
+	let nameCalls = 0;
+	let ageCalls = 0;
+	model.subscribeKey("name", () => nameCalls++);
+	model.subscribeKey("age", () => ageCalls++);
+
+	model.__hydrate({ name: "Jane" });
+
+	assertEquals(nameCalls, 1);
+	assertEquals(ageCalls, 0);
+});
+
+// -----------------------------------------------------------------------------
+// isModelized
+// -----------------------------------------------------------------------------
+
+Deno.test("isModelized identifies proxies from modelize()", () => {
+	const model = modelize({ name: "John" });
+	assert(isModelized(model));
+	assert(!isModelized({ name: "John" }));
+	assert(!isModelized(null));
+	assert(!isModelized(undefined));
+	assert(!isModelized(42));
+});
+
+// -----------------------------------------------------------------------------
+// AJV override
+// -----------------------------------------------------------------------------
+
+Deno.test("options.ajv uses the injected instance", async () => {
+	const { Ajv } = await import("ajv");
+	const ajv = new Ajv({ allErrors: true });
+	let compileCalls = 0;
+	const origCompile = ajv.compile.bind(ajv);
+	ajv.compile = ((schema: unknown) => {
+		compileCalls++;
+		return origCompile(schema as any);
+	}) as typeof ajv.compile;
+
+	const model = modelize(
+		{ age: -5 },
+		{
+			ajv,
+			schema: {
+				type: "object",
+				properties: { age: { type: "number", minimum: 0 } },
+			},
+		},
+	);
+
+	assertEquals(model.__isValid, false);
+	assertEquals(compileCalls, 1);
+});
+
+// -----------------------------------------------------------------------------
+// Validation caching / lazy re-validation
+// -----------------------------------------------------------------------------
+
+Deno.test("validation is cached and invalidated on mutation", () => {
+	let customRuns = 0;
+	const model = modelize(
+		{ age: 10 },
+		{
+			validate: (m) => {
+				customRuns++;
+				return m.age >= 0 ? true : "negative";
+			},
+		},
+	);
+
+	model.__isValid;
+	model.__isValid;
+	model.__errors;
+	assertEquals(customRuns, 1); // cached across 3 reads
+
+	model.age = 20; // mutation invalidates cache
+	model.__isValid;
+	assertEquals(customRuns, 2);
 });

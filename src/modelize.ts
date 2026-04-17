@@ -37,7 +37,7 @@ export interface ModelizeOptions<T extends object> {
 	/**
 	 * Optional JSON Schema for validation.
 	 * When provided, the model will be validated against this schema
-	 * whenever `__isValid` is accessed or `__validate()` is called.
+	 * whenever `__isValid`, `__errors`, or `__validate()` is accessed.
 	 * Uses AJV (Another JSON Validator) internally.
 	 */
 	schema?: JSONSchema;
@@ -46,7 +46,11 @@ export interface ModelizeOptions<T extends object> {
 	 * Optional custom validator function.
 	 * Called after JSON Schema validation (if any).
 	 *
-	 * @param model - The current model state
+	 * Note: The validator receives the unwrapped source object, not the
+	 * proxy. Accessing `__isValid` / `__errors` inside the validator is
+	 * therefore not possible (and would be circular).
+	 *
+	 * @param model - The current (unwrapped) model state
 	 * @returns `true` if valid, or an error message string if invalid
 	 *
 	 * @example
@@ -65,6 +69,23 @@ export interface ModelizeOptions<T extends object> {
 	 * @default true
 	 */
 	strict?: boolean;
+
+	/**
+	 * When `true`, the source object is deep-cloned before being wrapped so
+	 * that the caller's original reference is not mutated. `__source` then
+	 * refers to the internal clone.
+	 *
+	 * @default false
+	 */
+	clone?: boolean;
+
+	/**
+	 * Optional AJV instance used to compile the schema. When omitted, a lazy
+	 * module-level singleton is used. Inject your own instance to apply
+	 * custom formats/keywords, or to isolate schema caches in long-running
+	 * processes with many dynamic schemas.
+	 */
+	ajv?: Ajv;
 }
 
 /**
@@ -74,7 +95,9 @@ export interface ModelizeOptions<T extends object> {
  * ```typescript
  * const error: ValidationError = {
  *   path: "/age",
- *   message: "must be >= 0"
+ *   message: "must be >= 0",
+ *   keyword: "minimum",
+ *   params: { comparison: ">=", limit: 0 }
  * };
  * ```
  */
@@ -91,6 +114,19 @@ export interface ValidationError {
 	 * Human-readable description of the validation failure.
 	 */
 	message: string;
+
+	/**
+	 * For schema errors: the AJV keyword that failed (e.g. `"minimum"`,
+	 * `"required"`, `"type"`). Absent for custom-validator errors.
+	 */
+	keyword?: string;
+
+	/**
+	 * For schema errors: additional structured information about the failure
+	 * as provided by AJV (e.g. `{ limit: 0, comparison: ">=" }` for `minimum`).
+	 * Absent for custom-validator errors.
+	 */
+	params?: Record<string, unknown>;
 }
 
 /**
@@ -112,17 +148,20 @@ export interface ValidationError {
  */
 export class ModelizeValidationError extends Error {
 	/**
+	 * Array of field-level validation errors. Readonly; treat as immutable.
+	 */
+	public readonly errors: ValidationError[];
+
+	/**
 	 * Creates a new ModelizeValidationError.
 	 *
 	 * @param message - The error message
 	 * @param errors - Array of field-level validation errors
 	 */
-	constructor(
-		message: string,
-		public errors: ValidationError[] = [],
-	) {
+	constructor(message: string, errors: ValidationError[] = []) {
 		super(message);
 		this.name = "ModelizeValidationError";
+		this.errors = errors;
 	}
 }
 
@@ -130,11 +169,6 @@ export class ModelizeValidationError extends Error {
  * Methods and properties added to a modelized object.
  * These are accessed via the proxy and use the `__` prefix convention
  * to avoid collision with user-defined properties.
- *
- * The `__` (double underscore) prefix is used intentionally to:
- * 1. Clearly distinguish framework methods from user data properties
- * 2. Minimize the chance of naming collisions with source object properties
- * 3. Signal that these are "internal" or "meta" properties of the wrapper
  *
  * The only exception is `subscribe`, which has no prefix to maintain
  * compatibility with the Svelte store contract.
@@ -147,13 +181,6 @@ export interface ModelizedMethods<T extends object> {
 	 * Always returns a Set (empty when clean, never null).
 	 *
 	 * @readonly
-	 *
-	 * @example
-	 * ```typescript
-	 * model.name = "Jane";
-	 * model.__dirty.has("name"); // true
-	 * model.__dirty.size;        // 1
-	 * ```
 	 */
 	readonly __dirty: Set<keyof T>;
 
@@ -162,154 +189,93 @@ export interface ModelizedMethods<T extends object> {
 	 * Equivalent to `__dirty.size > 0`.
 	 *
 	 * @readonly
-	 *
-	 * @example
-	 * ```typescript
-	 * if (model.__isDirty) {
-	 *   console.log("Model has unsaved changes");
-	 * }
-	 * ```
 	 */
 	readonly __isDirty: boolean;
 
 	/**
 	 * Returns `true` if the model passes all validation rules.
-	 * Runs validation lazily when accessed (not on every property change).
-	 * Updates `__errors` with the validation results.
+	 *
+	 * Validation is lazy and cached: it runs on first access after a
+	 * mutation (set / delete / `__hydrate` / `__resetToInitial`) and the
+	 * result is reused by subsequent reads of `__isValid`, `__errors`, and
+	 * `__validate()` until the next mutation.
 	 *
 	 * @readonly
-	 *
-	 * @example
-	 * ```typescript
-	 * if (!model.__isValid) {
-	 *   console.log("Errors:", model.__errors);
-	 * }
-	 * ```
 	 */
 	readonly __isValid: boolean;
 
 	/**
-	 * Reference to the original unwrapped source object.
-	 * Changes to the modelized object are reflected here.
+	 * Reference to the original unwrapped source object (or, when the
+	 * `clone` option was used, the internal clone).
 	 *
 	 * @readonly
-	 *
-	 * @example
-	 * ```typescript
-	 * const source = { name: "John" };
-	 * const model = modelize(source);
-	 * model.name = "Jane";
-	 * console.log(source.name); // "Jane"
-	 * console.log(model.__source === source); // true
-	 * ```
 	 */
 	readonly __source: T;
 
 	/**
-	 * Deep clone of the original source values at creation time.
+	 * Deep clone of the source values at creation time.
 	 * Used by `__resetToInitial()` to restore the model to its initial state.
 	 * This snapshot is immutable and not affected by subsequent changes.
 	 *
 	 * @readonly
-	 *
-	 * @example
-	 * ```typescript
-	 * const model = modelize({ name: "John" });
-	 * model.name = "Jane";
-	 * console.log(model.__initial.name); // "John" (unchanged)
-	 * ```
 	 */
 	readonly __initial: T;
 
 	/**
-	 * Array of validation errors from the last validation check.
-	 * Empty array if the model is valid or hasn't been validated yet.
-	 * Updated whenever `__isValid` is accessed or `__validate()` is called.
+	 * Array of validation errors. Reading this property triggers (lazy,
+	 * cached) validation, so it is always consistent with `__isValid`.
 	 *
 	 * @readonly
-	 *
-	 * @example
-	 * ```typescript
-	 * model.__isValid; // triggers validation
-	 * for (const error of model.__errors) {
-	 *   console.log(`${error.path}: ${error.message}`);
-	 * }
-	 * ```
 	 */
 	readonly __errors: ValidationError[];
 
 	/**
 	 * Validates the model and throws `ModelizeValidationError` if invalid.
-	 * Use this when you want validation to halt execution on failure.
 	 *
 	 * @returns `true` if validation passes
-	 * @throws {ModelizeValidationError} If validation fails, with `errors` array containing details
-	 *
-	 * @example
-	 * ```typescript
-	 * try {
-	 *   model.__validate();
-	 *   await saveToDatabase(model);
-	 * } catch (e) {
-	 *   if (e instanceof ModelizeValidationError) {
-	 *     showErrors(e.errors);
-	 *   }
-	 * }
-	 * ```
+	 * @throws {ModelizeValidationError} If validation fails
 	 */
 	__validate(): true;
 
 	/**
 	 * Clears the dirty state, marking all properties as "clean".
 	 * Does NOT change any property values.
-	 * Triggers a subscriber notification.
-	 *
-	 * Use this after successfully saving the model to indicate
-	 * there are no longer unsaved changes.
-	 *
-	 * @example
-	 * ```typescript
-	 * await saveToDatabase(model);
-	 * model.__reset(); // Clear dirty flags after save
-	 * ```
+	 * Triggers a subscriber notification only if the dirty set was non-empty.
 	 */
 	__reset(): void;
 
 	/**
 	 * Restores all properties to their initial values (from creation time)
-	 * and clears the dirty state.
-	 * Triggers a subscriber notification.
-	 *
-	 * Use this to implement "cancel" or "revert changes" functionality.
-	 *
-	 * @example
-	 * ```typescript
-	 * // User clicks "Cancel" button
-	 * model.__resetToInitial();
-	 * ```
+	 * and clears the dirty state. Under `strict: false`, properties added
+	 * after creation are removed.
+	 * Triggers a subscriber notification only if the state actually changed.
 	 */
 	__resetToInitial(): void;
 
 	/**
-	 * Updates multiple properties in a single operation with one subscriber notification.
-	 * More efficient than setting properties individually when updating many values.
+	 * Updates multiple properties in a single (atomic) operation with a
+	 * single subscriber notification.
+	 *
+	 * Atomicity: under `strict: true`, unknown keys are rejected **before**
+	 * any mutation is applied. Under `{ validate: true }`, the schema/custom
+	 * validator is checked against the candidate state first, and nothing
+	 * is mutated when validation fails.
+	 *
+	 * A notification is emitted only if at least one value actually changed
+	 * or `resetDirty` cleared a non-empty dirty set.
 	 *
 	 * @param data - Partial object with properties to update
-	 * @param options - Optional configuration
 	 * @param options.resetDirty - If `true`, clears dirty state after hydration
+	 * @param options.validate - If `true`, run validation against the candidate
+	 *   state and throw `ModelizeValidationError` (without mutating) on failure
 	 *
 	 * @throws {Error} If `strict` mode is enabled and data contains unknown properties
-	 *
-	 * @example
-	 * ```typescript
-	 * // Update from API response
-	 * model.__hydrate(apiResponse, { resetDirty: true });
-	 *
-	 * // Batch update without clearing dirty
-	 * model.__hydrate({ name: "Jane", age: 25 });
-	 * ```
+	 * @throws {ModelizeValidationError} If `validate: true` and validation fails
 	 */
-	__hydrate(data: Partial<T>, options?: { resetDirty?: boolean }): void;
+	__hydrate(
+		data: Partial<T>,
+		options?: { resetDirty?: boolean; validate?: boolean },
+	): void;
 
 	/**
 	 * Subscribes to model changes. Follows the Svelte store contract:
@@ -317,90 +283,42 @@ export interface ModelizedMethods<T extends object> {
 	 * - Callback is called on every subsequent change
 	 * - Returns an unsubscribe function
 	 *
-	 * This method has no `__` prefix to maintain Svelte compatibility,
-	 * allowing use of the `$model` auto-subscription syntax.
-	 *
 	 * @param callback - Function called with the model on each change
-	 * @returns Unsubscribe function to stop receiving updates
-	 *
-	 * @example
-	 * ```typescript
-	 * const unsubscribe = model.subscribe((m) => {
-	 *   console.log("Model changed:", m.name);
-	 * });
-	 *
-	 * // Later, to stop listening:
-	 * unsubscribe();
-	 * ```
-	 *
-	 * @example Svelte usage
-	 * ```svelte
-	 * <script>
-	 *   const user = modelize({ name: "John" });
-	 * </script>
-	 *
-	 * <input bind:value={$user.name} />
-	 * ```
+	 * @returns Unsubscribe function
 	 */
 	subscribe(callback: (model: Modelized<T>) => void): () => void;
+
+	/**
+	 * Subscribes to changes of a specific property. The callback is invoked
+	 * only when the given key's value changes (by `===` identity), and
+	 * receives `(newValue, previousValue)`.
+	 *
+	 * Unlike `subscribe`, the callback is **not** called immediately.
+	 *
+	 * @param key - Property key to watch
+	 * @param callback - Called with `(newValue, previousValue)` on change
+	 * @returns Unsubscribe function
+	 */
+	subscribeKey<K extends keyof T>(
+		key: K,
+		callback: (value: T[K], previous: T[K]) => void,
+	): () => void;
 }
 
 /**
  * A modelized object that combines the original source type `T`
  * with the `ModelizedMethods` interface.
  *
- * This is the return type of the `modelize()` function.
- *
  * @template T - The type of the source object
- *
- * @example
- * ```typescript
- * interface User {
- *   name: string;
- *   age: number;
- * }
- *
- * const user: Modelized<User> = modelize({ name: "John", age: 30 });
- * user.name;      // string (from User)
- * user.__isDirty; // boolean (from ModelizedMethods)
- * ```
  */
 export type Modelized<T extends object> = T & ModelizedMethods<T>;
 
-// AJV instance (lazy initialized)
-let ajv: Ajv | null = null;
+// -----------------------------------------------------------------------------
+// Reserved names
+// -----------------------------------------------------------------------------
 
-function getAjv(): Ajv {
-	if (!ajv) {
-		ajv = new Ajv({ allErrors: true });
-	}
-	return ajv;
-}
-
-function ajvErrorsToValidationErrors(
-	errors: ErrorObject[] | null | undefined,
-): ValidationError[] {
-	if (!errors) return [];
-	return errors.map((e) => ({
-		path: e.instancePath || "/",
-		message: e.message || "Unknown validation error",
-	}));
-}
-
-function deepClone<T>(obj: T): T {
-	if (obj === null || typeof obj !== "object") return obj;
-	if (Array.isArray(obj)) return obj.map(deepClone) as T;
-	const cloned = {} as T;
-	for (const key in obj) {
-		if (Object.prototype.hasOwnProperty.call(obj, key)) {
-			cloned[key] = deepClone(obj[key]);
-		}
-	}
-	return cloned;
-}
-
-/** Reserved property names that cannot be used in source objects */
-const RESERVED_NAMES = new Set([
+/** Reserved property names that cannot be used in source objects. */
+const RESERVED_NAMES: ReadonlySet<string> = new Set([
 	"__dirty",
 	"__isDirty",
 	"__isValid",
@@ -412,98 +330,131 @@ const RESERVED_NAMES = new Set([
 	"__resetToInitial",
 	"__hydrate",
 	"subscribe",
+	"subscribeKey",
 ]);
 
+/** Symbol used to tag proxies for `isModelized()`. */
+const MODELIZED_TAG: unique symbol = Symbol.for("@marianmeres/modelize.tag");
+
+// -----------------------------------------------------------------------------
+// AJV
+// -----------------------------------------------------------------------------
+
+let defaultAjv: Ajv | null = null;
+
+function getDefaultAjv(): Ajv {
+	if (!defaultAjv) defaultAjv = new Ajv({ allErrors: true });
+	return defaultAjv;
+}
+
+function ajvErrorsToValidationErrors(
+	errors: ErrorObject[] | null | undefined,
+): ValidationError[] {
+	if (!errors) return [];
+	return errors.map((e) => ({
+		path: e.instancePath || "/",
+		message: e.message || "Unknown validation error",
+		keyword: e.keyword,
+		params: e.params as Record<string, unknown>,
+	}));
+}
+
+// -----------------------------------------------------------------------------
+// Deep clone
+// -----------------------------------------------------------------------------
+
 /**
- * Wraps a source object with a Proxy that provides:
- * - **Dirty tracking**: Know which properties have changed via `__dirty` and `__isDirty`
- * - **Validation**: JSON Schema and/or custom validator with field-level error reporting
- * - **Reset capabilities**: Clear dirty state or restore initial values
- * - **Svelte compatibility**: `subscribe` method follows the Svelte store contract
+ * Deep clone that prefers the platform `structuredClone` (which handles
+ * Date, Map, Set, RegExp, typed arrays, and cycles), falling back to a
+ * manual clone for payloads that structuredClone rejects (e.g. objects
+ * containing functions).
+ */
+function deepClone<T>(obj: T): T {
+	if (obj === null || typeof obj !== "object") return obj;
+	if (typeof globalThis.structuredClone === "function") {
+		try {
+			return globalThis.structuredClone(obj);
+		} catch {
+			// Fall through to manual clone for non-cloneable payloads
+			// (e.g. objects containing functions).
+		}
+	}
+	return manualDeepClone(obj, new WeakMap());
+}
+
+function manualDeepClone<T>(obj: T, seen: WeakMap<object, unknown>): T {
+	if (obj === null || typeof obj !== "object") return obj;
+	const existing = seen.get(obj as object);
+	if (existing !== undefined) return existing as T;
+	if (obj instanceof Date) return new Date(obj.getTime()) as unknown as T;
+	if (obj instanceof RegExp) {
+		return new RegExp(obj.source, obj.flags) as unknown as T;
+	}
+	if (Array.isArray(obj)) {
+		const arr: unknown[] = [];
+		seen.set(obj as object, arr);
+		for (const item of obj) arr.push(manualDeepClone(item, seen));
+		return arr as unknown as T;
+	}
+	const cloned = {} as Record<string, unknown>;
+	seen.set(obj as object, cloned);
+	for (const key in obj) {
+		if (Object.prototype.hasOwnProperty.call(obj, key)) {
+			cloned[key] = manualDeepClone(
+				(obj as Record<string, unknown>)[key],
+				seen,
+			);
+		}
+	}
+	return cloned as unknown as T;
+}
+
+// -----------------------------------------------------------------------------
+// Type guard
+// -----------------------------------------------------------------------------
+
+/**
+ * Type guard that returns `true` if `x` was produced by `modelize()`.
+ */
+export function isModelized<T extends object = Record<string, unknown>>(
+	x: unknown,
+): x is Modelized<T> {
+	if (x === null || typeof x !== "object") return false;
+	try {
+		return (x as Record<PropertyKey, unknown>)[MODELIZED_TAG] === true;
+	} catch {
+		return false;
+	}
+}
+
+// -----------------------------------------------------------------------------
+// modelize
+// -----------------------------------------------------------------------------
+
+/**
+ * Wraps a source object with a Proxy that provides dirty tracking,
+ * validation (JSON Schema + custom), atomic bulk updates, and a
+ * Svelte-compatible `subscribe` contract.
  *
- * The returned object behaves like the original but with additional methods/properties
- * prefixed with `__` (except `subscribe` for Svelte compatibility).
- *
- * @template T - The type of the source object (must be an object type)
- *
- * @param source - The object to wrap. Can be a plain object, class instance, or any object.
- *                 Must not contain properties with reserved names (`__dirty`, `__isValid`, etc.).
- * @param options - Optional configuration for validation and strict mode
- * @param options.schema - JSON Schema for validation (uses AJV internally)
- * @param options.validate - Custom validator function returning `true` or error message
- * @param options.strict - If `true` (default), prevents adding/deleting properties
- *
- * @returns A Proxy wrapping the source with tracking and validation capabilities
- *
- * @throws {Error} If source contains reserved property names
- * @throws {Error} If strict mode is enabled and attempting to add/delete properties
- *
- * @example Basic usage
- * ```typescript
- * const user = modelize({ name: "John", age: 30 });
- *
- * user.name = "Jane";
- * console.log(user.__isDirty);  // true
- * console.log(user.__dirty);    // Set { "name" }
- *
- * user.__reset();
- * console.log(user.__isDirty);  // false
- * ```
- *
- * @example With JSON Schema validation
- * ```typescript
- * const user = modelize(
- *   { name: "", age: 0 },
- *   {
- *     schema: {
- *       type: "object",
- *       properties: {
- *         name: { type: "string", minLength: 1 },
- *         age: { type: "number", minimum: 0, maximum: 150 }
- *       },
- *       required: ["name"]
- *     }
- *   }
- * );
- *
- * user.age = -5;
- * console.log(user.__isValid);  // false
- * console.log(user.__errors);   // [{ path: "/age", message: "must be >= 0" }]
- * ```
- *
- * @example With custom validator
- * ```typescript
- * const form = modelize(
- *   { password: "", confirmPassword: "" },
- *   {
- *     validate: (m) => m.password === m.confirmPassword
- *       ? true
- *       : "Passwords must match"
- *   }
- * );
- * ```
- *
- * @example Svelte integration
- * ```svelte
- * <script>
- *   import { modelize } from "@marianmeres/modelize";
- *   const user = modelize({ name: "John" });
- * </script>
- *
- * <input bind:value={$user.name} />
- * {#if $user.__isDirty}
- *   <button on:click={() => $user.__resetToInitial()}>Cancel</button>
- * {/if}
- * ```
+ * See {@link ModelizeOptions} for configuration and
+ * {@link ModelizedMethods} for the added API surface.
  */
 export function modelize<T extends object>(
 	source: T,
 	options: ModelizeOptions<T> = {},
 ): Modelized<T> {
-	const { schema, validate: customValidator, strict = true } = options;
+	const {
+		schema,
+		validate: customValidator,
+		strict = true,
+		clone = false,
+		ajv: ajvOverride,
+	} = options;
 
-	// Validate that source doesn't use reserved names
-	for (const key of Object.keys(source)) {
+	const working = clone ? deepClone(source) : source;
+
+	// Validate that working source doesn't use reserved names
+	for (const key of Object.keys(working)) {
 		if (RESERVED_NAMES.has(key)) {
 			throw new Error(
 				`Property "${key}" is reserved and cannot be used in modelized objects`,
@@ -511,41 +462,49 @@ export function modelize<T extends object>(
 		}
 	}
 
+	// -------------------------------------------------------------------------
 	// Internal state
+	// -------------------------------------------------------------------------
 	const dirty = new Set<keyof T>();
-	const initial = deepClone(source);
-	let lastErrors: ValidationError[] = [];
+	const initial = deepClone(working);
 
-	// Pub/sub for change notifications
 	const pubsub = createPubSub();
 	const CHANGE_EVENT = "change";
 
 	// Compiled schema validator (lazy)
 	let compiledValidator: ValidateFunction | null = null;
 
+	// Cached validation result; invalidated on any data mutation.
+	let cachedValidation: { valid: boolean; errors: ValidationError[] } | null = null;
+
+	// Per-property subscribers
+	const keySubs = new Map<
+		keyof T,
+		Set<(value: unknown, prev: unknown) => void>
+	>();
+
 	function getCompiledValidator(): ValidateFunction | null {
 		if (schema && !compiledValidator) {
-			compiledValidator = getAjv().compile(schema);
+			compiledValidator = (ajvOverride ?? getDefaultAjv()).compile(schema);
 		}
 		return compiledValidator;
 	}
 
-	// Validation logic
-	function doValidate(): { valid: boolean; errors: ValidationError[] } {
+	function runValidation(
+		candidate: T,
+	): { valid: boolean; errors: ValidationError[] } {
 		const errors: ValidationError[] = [];
 
-		// JSON Schema validation
 		const validator = getCompiledValidator();
 		if (validator) {
-			const valid = validator(source);
+			const valid = validator(candidate);
 			if (!valid) {
 				errors.push(...ajvErrorsToValidationErrors(validator.errors));
 			}
 		}
 
-		// Custom validator
 		if (customValidator) {
-			const result = customValidator(source as T);
+			const result = customValidator(candidate);
 			if (result !== true) {
 				errors.push({ path: "/", message: result });
 			}
@@ -554,35 +513,59 @@ export function modelize<T extends object>(
 		return { valid: errors.length === 0, errors };
 	}
 
-	// Notify subscribers
+	function getValidation(): { valid: boolean; errors: ValidationError[] } {
+		if (!cachedValidation) {
+			cachedValidation = runValidation(working);
+		}
+		return cachedValidation;
+	}
+
+	function invalidateValidation() {
+		cachedValidation = null;
+	}
+
 	function notify() {
 		pubsub.publish(CHANGE_EVENT, proxy);
 	}
 
-	// The proxy handler
+	function notifyKey<K extends keyof T>(key: K, value: T[K], prev: T[K]) {
+		const subs = keySubs.get(key);
+		if (!subs) return;
+		for (const cb of [...subs]) {
+			try {
+				cb(value, prev);
+			} catch (err) {
+				// Keep parity with pubsub: surface via console but don't break others.
+				// eslint-disable-next-line no-console
+				console.error(err);
+			}
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Proxy handler
+	// -------------------------------------------------------------------------
 	const handler: ProxyHandler<T> = {
 		get(target, prop, receiver) {
-			// Handle our special methods/properties first
+			// Private tag for isModelized()
+			if (prop === MODELIZED_TAG) return true;
+
 			switch (prop) {
 				case "__dirty":
 					return dirty;
 				case "__isDirty":
 					return dirty.size > 0;
-				case "__isValid": {
-					const { valid, errors } = doValidate();
-					lastErrors = errors;
-					return valid;
-				}
+				case "__isValid":
+					return getValidation().valid;
 				case "__source":
 					return target;
 				case "__initial":
 					return initial;
 				case "__errors":
-					return lastErrors;
+					return getValidation().errors;
 				case "__validate":
 					return () => {
-						const { valid, errors } = doValidate();
-						lastErrors = errors;
+						const { valid, errors } = getValidation();
 						if (!valid) {
 							throw new ModelizeValidationError(
 								"Validation failed",
@@ -593,65 +576,179 @@ export function modelize<T extends object>(
 					};
 				case "__reset":
 					return () => {
+						if (dirty.size === 0) return;
 						dirty.clear();
 						notify();
 					};
 				case "__resetToInitial":
 					return () => {
+						const t = target as Record<string, unknown>;
+						const init = initial as Record<string, unknown>;
+						let changed = false;
+
+						// Under strict:false, drop keys added after creation.
+						if (!strict) {
+							for (const key of Object.keys(t)) {
+								if (
+									!Object.prototype.hasOwnProperty.call(init, key)
+								) {
+									delete t[key];
+									changed = true;
+								}
+							}
+						}
+
 						for (const key in initial) {
-							if (Object.prototype.hasOwnProperty.call(initial, key)) {
-								(target as Record<string, unknown>)[key] = deepClone(
-									initial[key],
+							if (
+								Object.prototype.hasOwnProperty.call(initial, key)
+							) {
+								const next = deepClone(init[key]);
+								if (t[key] !== next) {
+									const prev = t[key];
+									t[key] = next;
+									changed = true;
+									notifyKey(
+										key as keyof T,
+										next as T[keyof T],
+										prev as T[keyof T],
+									);
+								}
+							}
+						}
+
+						if (dirty.size > 0) {
+							dirty.clear();
+							changed = true;
+						}
+
+						if (changed) {
+							invalidateValidation();
+							notify();
+						}
+					};
+				case "__hydrate":
+					return (
+						data: Partial<T>,
+						opts?: { resetDirty?: boolean; validate?: boolean },
+					) => {
+						const keys = Object.keys(data) as (keyof T)[];
+
+						// 1. Atomic strict-mode check before any mutation.
+						if (strict) {
+							for (const k of keys) {
+								if (!(k in (target as object))) {
+									throw new Error(
+										`Property "${
+											String(k)
+										}" does not exist on model (strict mode enabled)`,
+									);
+								}
+							}
+						}
+
+						// 2. Optional pre-apply validation against a candidate state.
+						if (opts?.validate) {
+							const candidate = {
+								...(target as Record<string, unknown>),
+								...(data as Record<string, unknown>),
+							} as T;
+							const { valid, errors } = runValidation(candidate);
+							if (!valid) {
+								throw new ModelizeValidationError(
+									"Validation failed",
+									errors,
 								);
 							}
 						}
-						dirty.clear();
-						notify();
-					};
-				case "__hydrate":
-					return (data: Partial<T>, opts?: { resetDirty?: boolean }) => {
-						for (const key in data) {
-							if (Object.prototype.hasOwnProperty.call(data, key)) {
-								if (strict && !(key in target)) {
-									throw new Error(
-										`Property "${key}" does not exist on model (strict mode enabled)`,
-									);
-								}
-								const oldValue = (target as Record<string, unknown>)[key];
-								const newValue = data[key];
-								(target as Record<string, unknown>)[key] = newValue;
-								if (oldValue !== newValue) {
-									dirty.add(key as keyof T);
-								}
+
+						// 3. Apply.
+						const t = target as Record<string, unknown>;
+						const changedKeys: {
+							key: keyof T;
+							prev: unknown;
+							next: unknown;
+						}[] = [];
+						for (const k of keys) {
+							const key = k as string;
+							const oldValue = t[key];
+							const newValue = (data as Record<string, unknown>)[key];
+							if (oldValue !== newValue) {
+								t[key] = newValue;
+								dirty.add(k);
+								changedKeys.push({
+									key: k,
+									prev: oldValue,
+									next: newValue,
+								});
 							}
 						}
+
+						let changed = changedKeys.length > 0;
 						if (opts?.resetDirty) {
+							if (dirty.size > 0) changed = true;
 							dirty.clear();
 						}
-						notify();
+
+						if (changedKeys.length > 0) invalidateValidation();
+
+						if (changed) {
+							for (const { key, prev, next } of changedKeys) {
+								notifyKey(
+									key,
+									next as T[keyof T],
+									prev as T[keyof T],
+								);
+							}
+							notify();
+						}
 					};
 				case "subscribe":
 					return (callback: (model: Modelized<T>) => void) => {
-						// Svelte contract: call immediately with current value
+						if (typeof callback !== "function") {
+							throw new TypeError(
+								"subscribe(callback): callback must be a function",
+							);
+						}
 						callback(proxy);
 						return pubsub.subscribe(CHANGE_EVENT, callback);
 					};
+				case "subscribeKey":
+					return <K extends keyof T>(
+						key: K,
+						callback: (value: T[K], prev: T[K]) => void,
+					) => {
+						if (typeof callback !== "function") {
+							throw new TypeError(
+								"subscribeKey(key, callback): callback must be a function",
+							);
+						}
+						let set = keySubs.get(key);
+						if (!set) {
+							set = new Set();
+							keySubs.set(key, set);
+						}
+						const cb = callback as (v: unknown, p: unknown) => void;
+						set.add(cb);
+						return () => {
+							const s = keySubs.get(key);
+							if (!s) return;
+							s.delete(cb);
+							if (s.size === 0) keySubs.delete(key);
+						};
+					};
 			}
 
-			// Default: access the target property
 			return Reflect.get(target, prop, receiver);
 		},
 
 		set(target, prop, value, receiver) {
 			const key = prop as string;
 
-			// Prevent setting reserved properties
 			if (RESERVED_NAMES.has(key)) {
 				throw new Error(`Cannot set reserved property "${key}"`);
 			}
 
-			// Strict mode check
-			if (strict && !(key in target)) {
+			if (strict && !(key in (target as object))) {
 				throw new Error(
 					`Property "${key}" does not exist on model (strict mode enabled)`,
 				);
@@ -662,27 +759,50 @@ export function modelize<T extends object>(
 
 			if (success && oldValue !== value) {
 				dirty.add(key as keyof T);
+				invalidateValidation();
+				notifyKey(
+					key as keyof T,
+					value as T[keyof T],
+					oldValue as T[keyof T],
+				);
 				notify();
 			}
 
 			return success;
 		},
 
-		// Prevent deleting properties in strict mode
+		has(target, prop) {
+			if (typeof prop === "string" && RESERVED_NAMES.has(prop)) {
+				return true;
+			}
+			if (prop === MODELIZED_TAG) return true;
+			return Reflect.has(target, prop);
+		},
+
 		deleteProperty(target, prop) {
 			if (strict) {
 				throw new Error(
 					`Cannot delete property "${String(prop)}" (strict mode enabled)`,
 				);
 			}
+			const key = prop as string;
+			const existed = Object.prototype.hasOwnProperty.call(target, key);
+			const prev = (target as Record<string, unknown>)[key];
 			const success = Reflect.deleteProperty(target, prop);
-			if (success) {
+			if (success && existed) {
+				dirty.add(key as keyof T);
+				invalidateValidation();
+				notifyKey(
+					key as keyof T,
+					undefined as T[keyof T],
+					prev as T[keyof T],
+				);
 				notify();
 			}
 			return success;
 		},
 	};
 
-	const proxy = new Proxy(source, handler) as Modelized<T>;
+	const proxy = new Proxy(working, handler) as Modelized<T>;
 	return proxy;
 }

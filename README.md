@@ -58,6 +58,8 @@ interface ModelizeOptions<T> {
 	schema?: JSONSchema; // JSON Schema for validation
 	validate?: (model: T) => true | string; // Custom validator
 	strict?: boolean; // Disallow new properties (default: true)
+	clone?: boolean; // Deep-clone source so the original is not mutated (default: false)
+	ajv?: Ajv; // Inject a custom AJV instance (optional)
 }
 ```
 
@@ -74,13 +76,20 @@ interface ModelizeOptions<T> {
 
 ### Methods
 
-| Method                      | Description                                                          |
-| --------------------------- | -------------------------------------------------------------------- |
-| `__validate()`              | Throws `ModelizeValidationError` if invalid, returns `true` if valid |
-| `__reset()`                 | Clears dirty state (values unchanged)                                |
-| `__resetToInitial()`        | Restores all properties to initial values and clears dirty state     |
-| `__hydrate(data, options?)` | Bulk update properties. Options: `{ resetDirty?: boolean }`          |
-| `subscribe(callback)`       | Svelte-compatible subscription. Returns unsubscribe function         |
+| Method                        | Description                                                                                  |
+| ----------------------------- | -------------------------------------------------------------------------------------------- |
+| `__validate()`                | Throws `ModelizeValidationError` if invalid, returns `true` if valid                         |
+| `__reset()`                   | Clears dirty state (values unchanged)                                                        |
+| `__resetToInitial()`          | Restores all properties to initial values and clears dirty state                             |
+| `__hydrate(data, options?)`   | Atomic bulk update. Options: `{ resetDirty?: boolean; validate?: boolean }`                  |
+| `subscribe(callback)`         | Svelte-compatible subscription. Returns unsubscribe function                                 |
+| `subscribeKey(key, callback)` | Per-property subscription; `callback(newValue, previousValue)`. Returns unsubscribe function |
+
+### Utility
+
+| Function         | Description                                             |
+| ---------------- | ------------------------------------------------------- |
+| `isModelized(x)` | Type guard — `true` if `x` was produced by `modelize()` |
 
 ## Dirty Tracking
 
@@ -172,6 +181,12 @@ user.__errors; // Contains both schema and custom validation errors
 
 ## Bulk Updates with `__hydrate`
 
+`__hydrate` is atomic: if `strict: true` and `data` contains an unknown key, no mutation
+happens. If `{ validate: true }` is set and the post-update state would be invalid, the
+call throws `ModelizeValidationError` and nothing is applied. Subscribers are notified
+once, and only if at least one value actually changed (or `resetDirty` cleared a non-empty
+dirty set).
+
 ```typescript
 const model = modelize({ name: "John", age: 30, city: "NYC" });
 
@@ -181,6 +196,42 @@ model.__hydrate({ name: "Jane", age: 25 });
 // Hydrate and clear dirty state
 model.__hydrate({ name: "Bob" }, { resetDirty: true });
 model.__isDirty; // false
+
+// Reject on validation failure (nothing is applied)
+try {
+	model.__hydrate(apiResponse, { validate: true });
+} catch (e) {
+	// e instanceof ModelizeValidationError, model state unchanged
+}
+```
+
+## Per-property Subscriptions with `subscribeKey`
+
+`subscribe` fires on every change. When you only care about one field:
+
+```typescript
+const model = modelize({ name: "John", age: 30 });
+
+const off = model.subscribeKey("age", (next, prev) => {
+	console.log(`age: ${prev} → ${next}`);
+});
+
+model.name = "Jane"; // nothing logged
+model.age = 31; // logs "age: 30 → 31"
+
+off();
+```
+
+Note: `subscribeKey` does **not** call back immediately (there is no "previous value" at
+subscription time). If you need the initial value, read it directly.
+
+## `isModelized()` Type Guard
+
+```typescript
+import { isModelized, modelize } from "@marianmeres/modelize";
+
+isModelized(modelize({ a: 1 })); // true
+isModelized({ a: 1 }); // false
 ```
 
 ## Strict Mode
@@ -194,6 +245,24 @@ model.extra = "value"; // throws Error
 // Allow dynamic properties
 const flexible = modelize({ name: "John" }, { strict: false });
 flexible.extra = "value"; // works
+delete flexible.name; // works — and marks `name` as dirty
+```
+
+Under `strict: false`, `__resetToInitial()` also removes any keys that were added after
+creation, fully restoring the initial shape.
+
+## Non-mutating Wrapping
+
+By default, `modelize` wraps the source object directly — mutations through the proxy
+update the original object. Pass `{ clone: true }` to deep-clone the source up front:
+
+```typescript
+const apiResponse = { name: "John", age: 30 };
+const model = modelize(apiResponse, { clone: true });
+
+model.name = "Jane";
+apiResponse.name; // "John" (unchanged)
+model.__source === apiResponse; // false (internal clone)
 ```
 
 ## Types
@@ -202,10 +271,12 @@ flexible.extra = "value"; // works
 import type {
 	JSONSchema,
 	Modelized,
+	ModelizedMethods,
 	ModelizeOptions,
-	ModelizeValidationError,
 	ValidationError,
 } from "@marianmeres/modelize";
+
+import { isModelized, modelize, ModelizeValidationError } from "@marianmeres/modelize";
 ```
 
 ## Why the `__` Prefix?
@@ -213,12 +284,11 @@ import type {
 You'll notice that most methods and properties added by `modelize` use a double underscore
 prefix (e.g., `__isDirty`, `__validate()`). This is intentional:
 
-1. **Avoid collisions**: Your source object might have properties like `dirty`, `valid`, or
-   `reset`. The `__` prefix ensures our meta-properties never conflict with your data.
+1. **Avoid collisions**: Your source object might have properties like `dirty`, `valid`,
+   or `reset`. The `__` prefix ensures our meta-properties never conflict with your data.
 
 2. **Clear distinction**: When reading code, `model.name` is obviously your data, while
    `model.__isDirty` is clearly a framework feature.
-
 
 The only exception is `subscribe`, which has no prefix to maintain compatibility with the
 Svelte store contract (allowing `$model` auto-subscription syntax).
@@ -228,9 +298,24 @@ Svelte store contract (allowing `$model` auto-subscription syntax).
 - **Shallow tracking**: Only direct property changes are tracked. Nested object mutations
   (e.g., `model.nested.prop = x`) don't trigger dirty state on the parent.
 - **Reserved names**: Properties `__dirty`, `__isDirty`, `__isValid`, `__source`,
-  `__initial`, `__errors`, `__validate`, `__reset`, `__resetToInitial`, `__hydrate`, and
-  `subscribe` are reserved and cannot be used in source objects.
-- **Validation is lazy**: Only runs when you access `__isValid` or call `__validate()`.
+  `__initial`, `__errors`, `__validate`, `__reset`, `__resetToInitial`, `__hydrate`,
+  `subscribe`, and `subscribeKey` are reserved and cannot be used in source objects.
+- **Validation is lazy and cached**: Runs on first access after any mutation and the
+  result is reused by subsequent reads of `__isValid`, `__errors`, and `__validate()`
+  until the next mutation. Custom validators with side effects will therefore fire less
+  often than in v2.0.x.
+- **Deep clone prefers `structuredClone`**: `__initial` and `__resetToInitial()` handle
+  `Date`, `Map`, `Set`, `RegExp`, typed arrays, and cyclic objects when the runtime
+  provides `structuredClone` (Deno, Node ≥ 17, modern browsers). Objects containing
+  functions fall back to the manual clone, which coerces those values away.
+- **Custom validator receives the unwrapped source**, not the proxy, to avoid recursion
+  through `__isValid`.
+
+## Migration from 2.0.x to 2.1.0
+
+2.1.0 is **behavior-compatible** for typical usage but introduces a few deliberate,
+correctness-driven changes. See [CHANGELOG.md](./CHANGELOG.md) for the full list. Most
+users will not need to change anything.
 
 ---
 
