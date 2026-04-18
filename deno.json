@@ -14,7 +14,7 @@
     "rpm": "deno task release minor -y && deno task publish"
   },
   "imports": {
-    "@marianmeres/npmbuild": "jsr:@marianmeres/npmbuild@^1.12.0",
+    "@marianmeres/npmbuild": "jsr:@marianmeres/npmbuild@^1.13.0",
     "@marianmeres/pubsub": "jsr:@marianmeres/pubsub@^3.0.0",
     "@std/assert": "jsr:@std/assert@^1.0.19",
     "ajv": "npm:ajv@^8.18.0",
