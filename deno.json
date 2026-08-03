@@ -8,7 +8,7 @@
     "test:watch": "deno test --watch",
     "npm:build": "deno run -A scripts/build-npm.ts",
     "npm:publish": "deno run -A scripts/build-npm.ts && cd ./.npm-dist && npm publish --access=public",
-    "release": "deno run -A jsr:@marianmeres/deno-release",
+    "release": "deno run -A jsr:@marianmeres/release",
     "publish": "deno publish && deno task npm:publish",
     "rp": "deno task release -y && deno task publish",
     "rpm": "deno task release minor -y && deno task publish"
