@@ -1,6 +1,6 @@
 {
 	"name": "@marianmeres/modelize",
-	"version": "2.2.2",
+	"version": "3.0.0",
 	"license": "MIT",
 	"exports": {
 		".": "./src/mod.ts",
