@@ -6,12 +6,17 @@ Complete API documentation for `@marianmeres/modelize`.
 
 - [modelize()](#function-modelize)
 - [isModelized()](#function-ismodelized)
+- [isStandardSchema()](#function-isstandardschema)
 - [ModelizeOptions](#interface-modelizeoptions)
 - [Modelized](#type-modelized)
 - [ModelizedMethods](#interface-modelizedmethods)
 - [ValidationError](#interface-validationerror)
 - [ModelizeValidationError](#class-modelizevalidationerror)
-- [JSONSchema](#type-jsonschema)
+- [StandardSchemaV1](#interface-standardschemav1)
+- [ModelizeIssue](#interface-modelizeissue)
+- [Subpath: `@marianmeres/modelize/ajv`](#subpath-marianmeresmodelizeajv)
+  - [ajvSchema()](#function-ajvschema)
+  - [JSONSchema](#type-jsonschema)
 - [Reserved Property Names](#reserved-property-names)
 
 ---
@@ -50,6 +55,9 @@ Svelte-compatible reactivity.
 
 - `Error` - If source contains reserved property names (`__dirty`, `__isValid`, etc.)
 - `Error` - If strict mode is enabled and attempting to add/delete properties
+- `TypeError` - If `options.schema` is not a Standard Schema. Checked eagerly at the
+  `modelize()` call, with a message pointing at `ajvSchema()` for plain JSON Schema
+  documents.
 
 ### Examples
 
@@ -66,26 +74,48 @@ user.__reset();
 console.log(user.__isDirty); // false
 ```
 
-**With JSON Schema validation:**
+**With Standard Schema validation:**
 
 ```typescript
+import { z } from "zod";
+
 const user = modelize(
 	{ name: "", age: 0 },
 	{
-		schema: {
+		schema: z.object({
+			name: z.string().min(1),
+			age: z.number().min(0).max(150),
+		}),
+	},
+);
+
+user.age = -5;
+console.log(user.__isValid); // false
+console.log(user.__errors); // [{ path: "/age", message: "Too small: ..." }, ...]
+```
+
+**With JSON Schema validation:**
+
+```typescript
+import { ajvSchema } from "@marianmeres/modelize/ajv";
+
+const user = modelize(
+	{ name: "", age: 0 },
+	{
+		schema: ajvSchema({
 			type: "object",
 			properties: {
 				name: { type: "string", minLength: 1 },
 				age: { type: "number", minimum: 0, maximum: 150 },
 			},
 			required: ["name"],
-		},
+		}),
 	},
 );
 
 user.age = -5;
 console.log(user.__isValid); // false
-console.log(user.__errors); // [{ path: "/age", message: "must be >= 0" }]
+console.log(user.__errors); // [{ path: "/age", message: "must be >= 0", keyword: "minimum", ... }]
 ```
 
 **With custom validator:**
@@ -137,15 +167,44 @@ isModelized(null); // false
 
 ---
 
+## Function: `isStandardSchema`
+
+```typescript
+function isStandardSchema(x: unknown): x is StandardSchemaV1;
+```
+
+Type guard that returns `true` if `x` implements the
+[Standard Schema V1](https://standardschema.dev) interface — that is, it exposes a
+`~standard` property whose `version` is `1` and whose `validate` is a function.
+
+Accepts both objects and **functions**, because some libraries (notably ArkType) expose
+callable schemas. Property access is guarded, so exotic proxies that throw on `get` return
+`false` rather than propagating.
+
+This is the same check `modelize()` performs on `options.schema`.
+
+### Example
+
+```typescript
+import { isStandardSchema } from "@marianmeres/modelize";
+import { z } from "zod";
+
+isStandardSchema(z.object({ a: z.string() })); // true
+isStandardSchema(type({ a: "string" })); // true (ArkType — callable)
+isStandardSchema({ type: "object" }); // false (plain JSON Schema)
+isStandardSchema(null); // false
+```
+
+---
+
 ## Interface: `ModelizeOptions`
 
 ```typescript
 interface ModelizeOptions<T extends object> {
-	schema?: JSONSchema;
-	validate?: (model: T) => true | string;
+	schema?: StandardSchemaV1;
+	validate?: (model: T) => true | string | ValidationError[];
 	strict?: boolean;
 	clone?: boolean;
-	ajv?: Ajv;
 }
 ```
 
@@ -159,19 +218,28 @@ Configuration options for the `modelize` function.
 
 ### Properties
 
-| Property   | Type                           | Default | Description                                                                                                                                                                                                |
-| ---------- | ------------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema`   | `JSONSchema`                   | -       | Optional JSON Schema for validation. When provided, the model is validated against this schema whenever `__isValid`, `__errors`, or `__validate()` is accessed. Uses AJV internally.                       |
-| `validate` | `(model: T) => true \| string` | -       | Optional custom validator. Called after JSON Schema validation (if any) and receives the **unwrapped** source object. Return `true` if valid or an error-message string.                                   |
-| `strict`   | `boolean`                      | `true`  | When `true`, prevents adding/deleting properties. Set to `false` to allow dynamic properties.                                                                                                              |
-| `clone`    | `boolean`                      | `false` | When `true`, deep-clones the source before wrapping so the caller's original object is not mutated. `__source` refers to the internal clone.                                                               |
-| `ajv`      | `Ajv`                          | -       | Optional AJV instance used to compile the schema. When omitted, a module-level singleton is used. Inject your own to register custom formats/keywords or to isolate schema caches in long-lived processes. |
+| Property   | Type                                                | Default | Description                                                                                                                                                                                                                                            |
+| ---------- | --------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `schema`   | `StandardSchemaV1`                                  | -       | Optional [Standard Schema](https://standardschema.dev) validator. When provided, the model is validated against it whenever `__isValid`, `__errors`, or `__validate()` is accessed. Wrap plain JSON Schema with `ajvSchema()`.                         |
+| `validate` | `(model: T) => true \| string \| ValidationError[]` | -       | Optional custom validator. Called after schema validation (if any) and receives the **unwrapped** source object. Return `true` if valid, an error-message string for a root-level error, or an array of `ValidationError`. An empty array means valid. |
+| `strict`   | `boolean`                                           | `true`  | When `true`, prevents adding/deleting properties. Set to `false` to allow dynamic properties.                                                                                                                                                          |
+| `clone`    | `boolean`                                           | `false` | When `true`, deep-clones the source before wrapping so the caller's original object is not mutated. `__source` refers to the internal clone.                                                                                                           |
+
+### Notes on `schema`
+
+- **Validator only.** Standard Schema's `validate()` returns a possibly transformed value;
+  `modelize` discards it. Transforms, coercions and defaults are checked but never written
+  back to the model. See [Schemas Do Not Transform](#schemas-do-not-transform).
+- **Synchronous only.** A schema returning a `Promise` throws a `TypeError`. See
+  [Synchronous Validation Only](#synchronous-validation-only).
+- **Validated eagerly.** A non-Standard-Schema value throws a `TypeError` at the
+  `modelize()` call rather than on first validation.
 
 ### Example
 
 ```typescript
 const options: ModelizeOptions<User> = {
-	schema: { type: "object", properties: { age: { minimum: 0 } } },
+	schema: z.object({ age: z.number().min(0) }),
 	validate: (m) => m.age >= 18 ? true : "Must be an adult",
 	strict: true,
 	clone: false,
@@ -448,12 +516,36 @@ Represents a single validation error with its location and message.
 
 ### Properties
 
-| Property  | Type                                 | Description                                                                                                   |
-| --------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `path`    | `string`                             | JSON Pointer path to the invalid property. Root-level errors use "/". Examples: `/name`, `/address/city`, `/` |
-| `message` | `string`                             | Human-readable description of the validation failure                                                          |
-| `keyword` | `string` (optional)                  | AJV keyword that failed (e.g. `"minimum"`, `"required"`, `"type"`). Absent for custom-validator errors.       |
-| `params`  | `Record<string, unknown>` (optional) | Structured AJV details (e.g. `{ limit: 0, comparison: ">=" }`). Absent for custom-validator errors.           |
+| Property  | Type                                 | Description                                                                                                                                                                                                               |
+| --------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | `string`                             | JSON Pointer path to the invalid property. Root-level errors use "/". Examples: `/name`, `/address/city`, `/`                                                                                                             |
+| `message` | `string`                             | Human-readable description of the validation failure                                                                                                                                                                      |
+| `keyword` | `string` (optional)                  | Schema keyword that failed (e.g. `"minimum"`, `"required"`, `"type"`). Populated by `ajvSchema()` only — other Standard Schema libraries don't report one. Absent for custom-validator errors unless you set it yourself. |
+| `params`  | `Record<string, unknown>` (optional) | Structured details (e.g. `{ limit: 0, comparison: ">=" }`). Populated by `ajvSchema()` only; see `keyword`.                                                                                                               |
+
+When absent, these keys are omitted from the object entirely rather than set to
+`undefined`, so `"keyword" in error` is a reliable check.
+
+### Path Format
+
+`path` is a [JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901). Standard Schema
+reports issue paths as arrays whose segments are either bare keys or `{ key }` objects;
+`modelize` normalizes both into a pointer string, escaping `~` as `~0` and `/` as `~1`. An
+issue with no path maps to `"/"`.
+
+```typescript
+// Standard Schema issue        ->  ValidationError.path
+{
+	path: ["address", "city"];
+} //  "/address/city"
+{
+	path: [{ key: "items" }, 0];
+} //  "/items/0"
+{
+	path: ["a/b"];
+} //  "/a~1b"
+{/* no path */} //  "/"
+```
 
 ### Example
 
@@ -511,16 +603,159 @@ try {
 
 ---
 
-## Type: `JSONSchema`
+## Interface: `StandardSchemaV1`
+
+```typescript
+interface StandardSchemaV1<Input = unknown, Output = Input> {
+	readonly "~standard": StandardSchemaV1.Props<Input, Output>;
+}
+```
+
+The [Standard Schema V1](https://standardschema.dev) interface, vendored into this
+package. The spec encourages copying the types rather than depending on
+`@standard-schema/spec`, so `modelize` has no type or runtime dependency while still
+interoperating with every library implementing the standard.
+
+The `StandardSchemaV1` namespace also exports `Props`, `Options`, `Result`,
+`SuccessResult`, `FailureResult`, `Issue`, `PathSegment`, `Types`, `InferInput` and
+`InferOutput`, matching the published spec.
+
+You rarely need this type directly — pass your schema library's value to `options.schema`
+and it will structurally match.
+
+### Example — implementing it yourself
+
+```typescript
+import type { StandardSchemaV1 } from "@marianmeres/modelize";
+
+const positive: StandardSchemaV1 = {
+	"~standard": {
+		version: 1,
+		vendor: "my-app",
+		validate(value) {
+			const v = value as { age: number };
+			return v.age >= 0
+				? { value: v }
+				: { issues: [{ message: "must be >= 0", path: ["age"] }] };
+		},
+	},
+};
+
+modelize({ age: 5 }, { schema: positive });
+```
+
+---
+
+## Interface: `ModelizeIssue`
+
+```typescript
+interface ModelizeIssue extends StandardSchemaV1.Issue {
+	readonly keyword?: string;
+	readonly params?: Record<string, unknown>;
+}
+```
+
+A Standard Schema issue optionally carrying the extra diagnostic fields `modelize`
+surfaces on `ValidationError`.
+
+The spec defines only `message` and `path`; additional properties are structurally
+permitted and ignored by consumers that don't know about them. `ajvSchema()` uses this to
+preserve AJV's `keyword` and `params` without stepping outside the standard, and any
+custom Standard Schema implementation can do the same.
+
+---
+
+## Subpath: `@marianmeres/modelize/ajv`
+
+JSON Schema support, backed by [AJV](https://ajv.js.org). This is the only module that
+imports `ajv`, which is declared as an **optional peer dependency** — install it
+explicitly if you use this subpath.
+
+```typescript
+import { ajvSchema, type JSONSchema } from "@marianmeres/modelize/ajv";
+```
+
+> **Content Security Policy:** AJV compiles schemas into JavaScript with `new Function`,
+> so this subpath cannot run under a CSP without `unsafe-eval`. The core has no codegen —
+> use a non-`eval` Standard Schema validator in that environment.
+
+### Function: `ajvSchema`
+
+```typescript
+function ajvSchema<T = unknown>(
+	schema: JSONSchema,
+	ajv?: Ajv,
+): StandardSchemaV1<T, T>;
+```
+
+Wraps a JSON Schema document into a Standard Schema validator suitable for
+`options.schema`.
+
+The schema is compiled **eagerly**, so an invalid schema throws here — at the definition
+site — rather than later from a property read.
+
+Validation errors preserve AJV's `keyword` and `params`, and AJV's `instancePath` is
+round-tripped exactly (including RFC 6901 escaping), so `ValidationError.path` is
+identical to what modelize 2.x produced.
+
+#### Parameters
+
+| Parameter | Type         | Required | Description                                                                                                                                                                                                 |
+| --------- | ------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema`  | `JSONSchema` | Yes      | The JSON Schema document to compile                                                                                                                                                                         |
+| `ajv`     | `Ajv`        | No       | AJV instance to compile with. When omitted, a lazily created module-level singleton configured as `new Ajv({ allErrors: true })` is used. Inject your own for custom formats/keywords or an isolated cache. |
+
+#### Returns
+
+`StandardSchemaV1<T, T>` — with `vendor: "ajv"`. The type parameter is documentary only;
+the model's type comes from the source object.
+
+#### Throws
+
+- `Error` — if AJV cannot compile the schema.
+
+#### Examples
+
+```typescript
+const user = modelize({ age: 25 }, {
+	schema: ajvSchema({
+		type: "object",
+		properties: { age: { type: "number", minimum: 0 } },
+	}),
+});
+```
+
+**Custom formats** — the default instance runs AJV's strict mode with no `ajv-formats`, so
+_any_ `format` keyword makes `ajvSchema()` **throw**
+(`unknown format "email" ignored in schema at path "..."` — a hard error despite the
+wording). Register formats on your own instance to enforce them:
+
+```typescript
+import { Ajv } from "ajv";
+import addFormats from "ajv-formats";
+
+const ajv = new Ajv({ allErrors: true });
+addFormats(ajv);
+
+modelize(data, { schema: ajvSchema(mySchema, ajv) });
+```
+
+### Type: `JSONSchema`
 
 ```typescript
 type JSONSchema = Record<string, unknown>;
 ```
 
-A JSON Schema object used for validation. Follows the JSON Schema specification (draft-07
-or later supported by AJV).
+A JSON Schema document, as understood by AJV.
 
-### Example
+The default `Ajv` export supports **draft-07 only**. For draft 2019-09 or 2020-12,
+construct the matching class yourself and pass it in:
+
+```typescript
+import Ajv2020 from "ajv/dist/2020";
+
+modelize(data, { schema: ajvSchema(mySchema, new Ajv2020({ allErrors: true })) });
+```
 
 ```typescript
 const schema: JSONSchema = {
@@ -532,6 +767,33 @@ const schema: JSONSchema = {
 	required: ["name"],
 };
 ```
+
+> **Note:** AJV throws `no schema with key or ref` for a `$schema` value it doesn't
+> recognize as a meta-schema. That covers both near-miss spellings of a supported draft —
+> e.g. `https://json-schema.org/draft-07/schema`, where the canonical URI is
+> `http://json-schema.org/draft-07/schema#` — and genuinely newer drafts that the default
+> `Ajv` class doesn't implement. Use a canonical URI, pass the matching `Ajv` class, or
+> strip the key before calling `ajvSchema()`.
+
+### AJV Strict Mode
+
+The default instance runs AJV's strict mode. It **throws** on unknown keywords and on any
+`format` keyword (no `ajv-formats` is registered), and warns via `strictTypes` when a
+numeric or string keyword has no sibling `type`:
+
+```typescript
+ajvSchema({ type: "object", notAKeyword: 1 });
+// Error: strict mode: unknown keyword: "notAKeyword"
+
+ajvSchema({ type: "object", properties: { e: { type: "string", format: "email" } } });
+// Error: unknown format "email" ignored in schema at path "#/properties/e"
+
+ajvSchema({ type: "object", properties: { age: { minimum: 0 } } });
+// warns: strict mode: missing type "number" for keyword "minimum" (strictTypes)
+```
+
+Pass `new Ajv({ allErrors: true, strict: false })` to relax all of it, or register
+`ajv-formats` to make `format` enforced rather than fatal.
 
 ---
 
@@ -587,7 +849,7 @@ data mutation (set / delete / `__hydrate` / `__resetToInitial`). The result is c
 reused for subsequent reads until the next mutation:
 
 ```typescript
-const model = modelize({ age: -5 }, { schema: { properties: { age: { minimum: 0 } } } });
+const model = modelize({ age: -5 }, { schema: z.object({ age: z.number().min(0) }) });
 
 model.__isValid; // runs validation
 model.__errors; // uses cached result (no re-run)
@@ -596,6 +858,54 @@ model.__validate(); // uses cached result
 model.age = 10; // mutation invalidates the cache
 model.__isValid; // re-runs validation
 ```
+
+A validator that _throws_ (rather than reporting issues) has its error cached the same
+way, so repeated reads don't re-run it. The cache clears on the next mutation.
+
+### Schemas Do Not Transform
+
+Standard Schema's `validate()` returns a possibly transformed value. `modelize` reads only
+`issues` and **discards the value**, so the model always holds exactly what you put in it.
+
+```typescript
+const model = modelize({ age: "42" }, { schema: z.object({ age: z.coerce.number() }) });
+
+model.__isValid; // true  — the schema coerces "42" and accepts it
+model.age; // "42" — still a string
+```
+
+```typescript
+const model = modelize({ a: "y" }, {
+	schema: z.object({ a: z.string(), b: z.string().default("x") }),
+});
+
+model.__isValid; // true — the schema fills in the default
+model.b; // undefined — and under strict mode it can never be added
+```
+
+This is a deliberate constraint of the design, not an oversight: validation is triggered
+by reading `__isValid` / `__errors`, and a getter must not mutate the model. Defaults
+adding keys would also violate strict mode. If you need the parsed output, parse before
+wrapping: `modelize(schema.parse(rawInput))`.
+
+### Synchronous Validation Only
+
+`validate()` may return a `Promise` under the spec, but `modelize` runs validation inside
+the synchronous `__isValid` / `__errors` / `__validate()` accessors. A schema that
+validates asynchronously (e.g. a Zod `async` refinement) throws a `TypeError` naming the
+vendor:
+
+```typescript
+const model = modelize({ a: "x" }, {
+	schema: z.object({ a: z.string().refine(async () => true) }),
+});
+
+model.__isValid; // throws TypeError: modelize: schema validation must be synchronous...
+```
+
+Note that this surfaces on first _read_, not at the `modelize()` call, since whether a
+schema validates asynchronously can depend on the data. The spec explicitly sanctions
+sync-only consumers rejecting Promises this way.
 
 ### Subscriber Notifications
 
@@ -617,6 +927,17 @@ a validator were to access `model.__isValid`. Use the argument directly:
 ```typescript
 validate: ((m) => m.password === m.confirmPassword ? true : "Passwords must match");
 ```
+
+### Custom Validator Return Values
+
+| Return              | Meaning                                                           |
+| ------------------- | ----------------------------------------------------------------- |
+| `true`              | Valid                                                             |
+| `string`            | Invalid — one error at path `"/"` with that message               |
+| `ValidationError[]` | Invalid — those errors verbatim, including any `keyword`/`params` |
+| `[]` (empty array)  | Valid                                                             |
+
+Errors from the schema come first, then the custom validator's.
 
 ### `in` Operator and Reserved Names
 

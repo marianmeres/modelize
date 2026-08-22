@@ -17,6 +17,14 @@ deno add jsr:@marianmeres/modelize
 npm install @marianmeres/modelize
 ```
 
+The core ships **no validator**. Bring your own
+[Standard Schema](https://standardschema.dev) library (Zod, Valibot, ArkType, …), or
+install `ajv` alongside if you want to validate with plain JSON Schema documents:
+
+```bash
+npm install @marianmeres/modelize ajv
+```
+
 ## Quick Example
 
 ```typescript
@@ -41,11 +49,11 @@ user.name; // 'John'
 ## Features
 
 - **Dirty tracking** - know which properties have changed
-- **Validation** - JSON Schema and/or custom validator functions
+- **Validation** - any Standard Schema validator and/or custom validator functions
 - **Field-level errors** - detailed validation error reports
 - **Reset to initial** - restore original values
 - **Svelte-compatible** - works with `$` auto-subscription
-- **Lightweight** - minimal API, no magic
+- **Lightweight** - ~3 KB gzipped, no bundled validator, no `eval`
 
 ## Main API
 
@@ -55,11 +63,10 @@ Wraps `source` object with a proxy.
 
 ```typescript
 interface ModelizeOptions<T> {
-	schema?: JSONSchema; // JSON Schema for validation
-	validate?: (model: T) => true | string; // Custom validator
+	schema?: StandardSchemaV1; // Any Standard Schema validator
+	validate?: (model: T) => true | string | ValidationError[]; // Custom validator
 	strict?: boolean; // Disallow new properties (default: true)
 	clone?: boolean; // Deep-clone source so the original is not mutated (default: false)
-	ajv?: Ajv; // Inject a custom AJV instance (optional)
 }
 ```
 
@@ -87,9 +94,11 @@ interface ModelizeOptions<T> {
 
 ### Utility
 
-| Function         | Description                                             |
-| ---------------- | ------------------------------------------------------- |
-| `isModelized(x)` | Type guard — `true` if `x` was produced by `modelize()` |
+| Function              | Description                                                    |
+| --------------------- | -------------------------------------------------------------- |
+| `isModelized(x)`      | Type guard — `true` if `x` was produced by `modelize()`        |
+| `isStandardSchema(x)` | Type guard — `true` if `x` implements Standard Schema V1       |
+| `ajvSchema(json)`     | From `@marianmeres/modelize/ajv` — wraps a JSON Schema for use |
 
 ## Dirty Tracking
 
@@ -117,24 +126,22 @@ model.__isDirty; // false
 
 ## Validation
 
-### JSON Schema
+`modelize` validates through the [Standard Schema](https://standardschema.dev) interface,
+so it works with any library implementing it — Zod, Valibot, ArkType, yup, joi and
+[many more](https://standardschema.dev) — without depending on any of them.
+
+### Standard Schema
 
 ```typescript
-const user = modelize(
-	{ age: 25 },
-	{
-		schema: {
-			type: "object",
-			properties: {
-				age: { type: "number", minimum: 0, maximum: 120 },
-			},
-		},
-	},
-);
+import { z } from "zod";
+
+const user = modelize({ age: 25 }, {
+	schema: z.object({ age: z.number().min(0) }),
+});
 
 user.age = -5;
 user.__isValid; // false
-user.__errors; // [{ path: '/age', message: 'must be >= 0' }]
+user.__errors; // [{ path: '/age', message: 'Too small: expected number to be >=0' }]
 
 try {
 	user.__validate();
@@ -143,7 +150,43 @@ try {
 }
 ```
 
+### JSON Schema
+
+Plain JSON Schema documents go through the AJV adapter on the `/ajv` subpath. This is the
+only place `ajv` is imported, so it costs nothing unless you use it.
+
+```typescript
+import { modelize } from "@marianmeres/modelize";
+import { ajvSchema } from "@marianmeres/modelize/ajv";
+
+const user = modelize({ age: 25 }, {
+	schema: ajvSchema({
+		type: "object",
+		properties: { age: { type: "number", minimum: 0 } },
+	}),
+});
+
+user.age = -5;
+user.__errors; // [{ path: '/age', message: 'must be >= 0', keyword: 'minimum', params: {...} }]
+```
+
+`ajvSchema(schema, ajv?)` accepts an optional AJV instance — use it to register custom
+formats or keywords, or to isolate the compiled-schema cache:
+
+```typescript
+import { Ajv } from "ajv";
+import addFormats from "ajv-formats";
+
+const ajv = new Ajv({ allErrors: true });
+addFormats(ajv);
+
+modelize(data, { schema: ajvSchema(mySchema, ajv) });
+```
+
 ### Custom Validator
+
+Return `true` when valid, a string for a single root-level error, or an array of
+`ValidationError` for field-level reporting:
 
 ```typescript
 const form = modelize(
@@ -159,18 +202,31 @@ form.__isValid; // false
 form.__errors; // [{ path: '/', message: 'Passwords must match' }]
 ```
 
+```typescript
+const form = modelize({ email: "nope", age: -1 }, {
+	validate: (m) => {
+		const errors: ValidationError[] = [];
+		if (!m.email.includes("@")) {
+			errors.push({ path: "/email", message: "Invalid email" });
+		}
+		if (m.age < 0) errors.push({ path: "/age", message: "Must be >= 0" });
+		return errors.length ? errors : true;
+	},
+});
+```
+
+An empty array means valid.
+
 ### Combined Validation
 
-Both JSON Schema and custom validator can be used together. All errors are collected.
+Both a schema and a custom validator can be used together. All errors are collected,
+schema errors first.
 
 ```typescript
 const user = modelize(
 	{ age: -5, status: "invalid" },
 	{
-		schema: {
-			type: "object",
-			properties: { age: { minimum: 0 } },
-		},
+		schema: z.object({ age: z.number().min(0) }),
 		validate: (m) =>
 			["active", "inactive"].includes(m.status) ? true : "Invalid status",
 	},
@@ -178,6 +234,84 @@ const user = modelize(
 
 user.__errors; // Contains both schema and custom validation errors
 ```
+
+## Choosing a Validator
+
+Both paths satisfy the same `schema` option, so this is mostly about your input and your
+runtime.
+
+|                       | Standard Schema (Zod, Valibot, …) | `ajvSchema()` (JSON Schema)              |
+| --------------------- | --------------------------------- | ---------------------------------------- |
+| Schema is written as  | TypeScript code                   | Portable JSON data                       |
+| Static type inference | Yes                               | No                                       |
+| `keyword` / `params`  | Not reported                      | Reported                                 |
+| Runs under strict CSP | Yes (no `eval`)                   | **No** — AJV compiles via `new Function` |
+| Extra install         | Your schema library               | `ajv`                                    |
+
+Pick JSON Schema when the schema must be data — stored in a file or database, sent over
+the wire, shared with other languages, or used as a `$schema` reference for editor
+autocomplete. Pick a Standard Schema library when the schema lives in your code and you
+want the types derived from it.
+
+**Content Security Policy:** AJV validates by generating JavaScript and calling
+`new Function` on it, so `ajvSchema()` cannot run under a CSP without `unsafe-eval` (the
+default in browser extensions and many hardened web apps). In that environment use a
+Standard Schema validator instead — the core has no codegen at all.
+
+If you hold a JSON Schema _and_ need to avoid `eval`, Zod can convert one for you. Note
+that `z.fromJSONSchema()` is experimental and **silently drops** several constraints —
+`uniqueItems`, `contains`/`minContains`/`maxContains`, `propertyNames`, draft-07
+`dependencies`, `minProperties`/`maxProperties`, and `minItems`/`maxItems` without a
+sibling `items` — converting without error and then not enforcing them. It also enforces
+`format` (where AJV's default strict instance rejects the schema outright), treats `const`
+with an object value as unsatisfiable, and resolves `$ref` based on the `$schema` string
+rather than as a JSON pointer. Check your schema against that list before relying on it:
+
+```typescript
+import * as z from "zod";
+
+// The throwaway registry is important: fromJSONSchema otherwise writes every
+// unrecognized key of your schema into Zod's process-global registry.
+const schema = z.fromJSONSchema(myJsonSchema, { registry: z.registry() });
+modelize(data, { schema });
+```
+
+## Schemas Validate, They Don't Transform
+
+Standard Schema's `validate()` returns a possibly transformed value. **`modelize` discards
+it** — the schema is used purely as a validator, so the model always holds exactly what
+you put in it.
+
+This matters for Zod features that rewrite data:
+
+```typescript
+const model = modelize({ age: "42" }, { schema: z.object({ age: z.coerce.number() }) });
+
+model.__isValid; // true  — the schema coerces "42" and accepts it
+model.age; // "42" — still a string; the coerced number was discarded
+```
+
+```typescript
+const model = modelize({ a: "y" }, {
+	schema: z.object({ a: z.string(), b: z.string().default("x") }),
+});
+
+model.__isValid; // true — the schema fills in the default
+model.b; // undefined — and under strict mode (the default) it can never be added
+```
+
+If you need the parsed output, parse before wrapping:
+
+```typescript
+const model = modelize(schema.parse(rawInput));
+```
+
+## Validation Is Synchronous
+
+Validation runs inside the `__isValid` / `__errors` / `__validate()` accessors, which are
+synchronous getters. A schema whose `validate()` returns a Promise — a Zod `async`
+refinement, for example — throws a `TypeError` naming the vendor, on first read rather
+than at `modelize()` time. Remove the async refinement, or validate outside `modelize`.
 
 ## Bulk Updates with `__hydrate`
 
@@ -225,13 +359,16 @@ off();
 Note: `subscribeKey` does **not** call back immediately (there is no "previous value" at
 subscription time). If you need the initial value, read it directly.
 
-## `isModelized()` Type Guard
+## Type Guards
 
 ```typescript
-import { isModelized, modelize } from "@marianmeres/modelize";
+import { isModelized, isStandardSchema, modelize } from "@marianmeres/modelize";
 
 isModelized(modelize({ a: 1 })); // true
 isModelized({ a: 1 }); // false
+
+isStandardSchema(z.object({ a: z.string() })); // true
+isStandardSchema({ type: "object" }); // false (plain JSON Schema)
 ```
 
 ## Strict Mode
@@ -269,14 +406,22 @@ model.__source === apiResponse; // false (internal clone)
 
 ```typescript
 import type {
-	JSONSchema,
 	Modelized,
 	ModelizedMethods,
+	ModelizeIssue,
 	ModelizeOptions,
+	StandardSchemaV1,
 	ValidationError,
 } from "@marianmeres/modelize";
 
-import { isModelized, modelize, ModelizeValidationError } from "@marianmeres/modelize";
+import {
+	isModelized,
+	isStandardSchema,
+	modelize,
+	ModelizeValidationError,
+} from "@marianmeres/modelize";
+
+import { ajvSchema, type JSONSchema } from "@marianmeres/modelize/ajv";
 ```
 
 ## Why the `__` Prefix?
@@ -302,8 +447,20 @@ Svelte store contract (allowing `$model` auto-subscription syntax).
   `subscribe`, and `subscribeKey` are reserved and cannot be used in source objects.
 - **Validation is lazy and cached**: Runs on first access after any mutation and the
   result is reused by subsequent reads of `__isValid`, `__errors`, and `__validate()`
-  until the next mutation. Custom validators with side effects will therefore fire less
-  often than in v2.0.x.
+  until the next mutation.
+- **The default AJV instance is strict**: `ajvSchema()`'s built-in instance is
+  `new Ajv({ allErrors: true })`, which runs AJV's strict mode. It **throws** on unknown
+  keywords, and — because no `ajv-formats` is registered — on _any_ `format` keyword:
+  `unknown format "email" ignored in schema at path "#/properties/e"`. Despite the word
+  "ignored" in AJV's message, this is a hard throw at the `ajvSchema()` call. Strict mode
+  also warns when a numeric/string keyword has no sibling `type` (`strictTypes`). Two ways
+  out: register `ajv-formats` on your own instance to _enforce_ formats, or pass
+  `new Ajv({ allErrors: true, strict: false })` to genuinely ignore them.
+- **AJV rejects unknown `$schema` URIs**: AJV throws `no schema with key or ref` for a
+  `$schema` value it doesn't recognize as a meta-schema, including near-miss spellings
+  like `https://json-schema.org/draft-07/schema` (the canonical draft-07 URI is
+  `http://json-schema.org/draft-07/schema#`). Either use a canonical URI or strip the key
+  before calling `ajvSchema()`.
 - **Deep clone prefers `structuredClone`**: `__initial` and `__resetToInitial()` handle
   `Date`, `Map`, `Set`, `RegExp`, typed arrays, and cyclic objects when the runtime
   provides `structuredClone` (Deno, Node ≥ 17, modern browsers). Objects containing
@@ -311,11 +468,37 @@ Svelte store contract (allowing `$model` auto-subscription syntax).
 - **Custom validator receives the unwrapped source**, not the proxy, to avoid recursion
   through `__isValid`.
 
-## Migration from 2.0.x to 2.1.0
+## Migration from 2.x to 3.0
 
-2.1.0 is **behavior-compatible** for typical usage but introduces a few deliberate,
-correctness-driven changes. See [CHANGELOG.md](./CHANGELOG.md) for the full list. Most
-users will not need to change anything.
+3.0 removes the bundled AJV dependency from the core. Validation now goes through the
+Standard Schema interface, and JSON Schema support moved to the `/ajv` subpath.
+
+**If you pass a JSON Schema**, wrap it with `ajvSchema()`:
+
+```diff
++ import { ajvSchema } from "@marianmeres/modelize/ajv";
+
+  modelize(data, {
+-   schema: { type: "object", properties: { age: { type: "number", minimum: 0 } } },
++   schema: ajvSchema({ type: "object", properties: { age: { type: "number", minimum: 0 } } }),
+  });
+```
+
+**If you injected an AJV instance** via `options.ajv`, pass it to `ajvSchema()` instead:
+
+```diff
+- modelize(data, { ajv: myAjv, schema: mySchema });
++ modelize(data, { schema: ajvSchema(mySchema, myAjv) });
+```
+
+**On npm**, `ajv` is now an optional peer dependency — install it explicitly if you use
+the `/ajv` subpath.
+
+Passing a plain JSON Schema object to `schema` now throws a `TypeError` at the
+`modelize()` call with these instructions, so the break is loud rather than silent.
+Everything else — dirty tracking, subscriptions, `__hydrate`, strict mode, error shapes
+from `ajvSchema()` (including `keyword` and `params`) — is unchanged. See
+[CHANGELOG.md](./CHANGELOG.md) for the full list.
 
 ---
 

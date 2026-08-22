@@ -1,3 +1,4 @@
-Lightweight proxy wrapper for JS/TS objects providing dirty tracking, JSON Schema validation 
-(AJV), and Svelte store compatibility. Wraps any object with ES6 Proxy to intercept get/set, 
-track changed properties, and notify subscribers reactively.
+Proxy wrapper turning any JS/TS object into a trackable model: per-property dirty tracking,
+field-level validation errors, atomic bulk updates, and reset-to-initial. Validates via any
+Standard Schema library (Zod, Valibot, ArkType) or plain JSON Schema through an optional AJV
+adapter, and implements the Svelte store contract for $ auto-subscription.

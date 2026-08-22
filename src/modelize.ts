@@ -1,23 +1,10 @@
 import { createPubSub } from "@marianmeres/pubsub";
-import { Ajv, type ErrorObject, type ValidateFunction } from "ajv";
-
-/**
- * A JSON Schema object used for validation.
- * Follows the JSON Schema specification (draft-07 or later supported by AJV).
- *
- * @example
- * ```typescript
- * const schema: JSONSchema = {
- *   type: "object",
- *   properties: {
- *     name: { type: "string", minLength: 1 },
- *     age: { type: "number", minimum: 0 }
- *   },
- *   required: ["name"]
- * };
- * ```
- */
-export type JSONSchema = Record<string, unknown>;
+import {
+	isStandardSchema,
+	issuePathToPointer,
+	type ModelizeIssue,
+	type StandardSchemaV1,
+} from "./standard-schema.ts";
 
 /**
  * Configuration options for the `modelize` function.
@@ -27,7 +14,7 @@ export type JSONSchema = Record<string, unknown>;
  * @example
  * ```typescript
  * const options: ModelizeOptions<User> = {
- *   schema: { type: "object", properties: { age: { minimum: 0 } } },
+ *   schema: z.object({ age: z.number().min(0) }),
  *   validate: (m) => m.age >= 18 ? true : "Must be an adult",
  *   strict: true
  * };
@@ -35,32 +22,68 @@ export type JSONSchema = Record<string, unknown>;
  */
 export interface ModelizeOptions<T extends object> {
 	/**
-	 * Optional JSON Schema for validation.
-	 * When provided, the model will be validated against this schema
-	 * whenever `__isValid`, `__errors`, or `__validate()` is accessed.
-	 * Uses AJV (Another JSON Validator) internally.
+	 * Optional [Standard Schema](https://standardschema.dev) validator.
+	 * When provided, the model is validated against it whenever `__isValid`,
+	 * `__errors`, or `__validate()` is accessed.
+	 *
+	 * Any library implementing the standard works directly — Zod, Valibot,
+	 * ArkType, yup, joi, and others. For a plain JSON Schema document, wrap it
+	 * with `ajvSchema()` from `@marianmeres/modelize/ajv`.
+	 *
+	 * The schema is used **as a validator only**: Standard Schema returns a
+	 * possibly transformed value, and `modelize` discards it. Transforms,
+	 * coercions and defaults are therefore checked but never written back to
+	 * the model — see the README for the implications.
+	 *
+	 * Validation is synchronous. A schema whose `validate()` returns a Promise
+	 * (e.g. a Zod async refinement) throws a `TypeError`.
+	 *
+	 * @example
+	 * ```typescript
+	 * import { z } from "zod";
+	 * modelize(data, { schema: z.object({ age: z.number().min(0) }) });
+	 * ```
+	 *
+	 * @example
+	 * ```typescript
+	 * import { ajvSchema } from "@marianmeres/modelize/ajv";
+	 * modelize(data, { schema: ajvSchema({ type: "object", ... }) });
+	 * ```
 	 */
-	schema?: JSONSchema;
+	schema?: StandardSchemaV1;
 
 	/**
 	 * Optional custom validator function.
-	 * Called after JSON Schema validation (if any).
+	 * Called after schema validation (if any).
 	 *
 	 * Note: The validator receives the unwrapped source object, not the
 	 * proxy. Accessing `__isValid` / `__errors` inside the validator is
 	 * therefore not possible (and would be circular).
 	 *
 	 * @param model - The current (unwrapped) model state
-	 * @returns `true` if valid, or an error message string if invalid
+	 * @returns `true` if valid; an error message string for a single
+	 *   root-level error; or an array of {@link ValidationError} for
+	 *   field-level reporting. An empty array means valid.
 	 *
-	 * @example
+	 * @example Single message
 	 * ```typescript
 	 * validate: (m) => m.password === m.confirmPassword
 	 *   ? true
 	 *   : "Passwords must match"
 	 * ```
+	 *
+	 * @example Field-level errors
+	 * ```typescript
+	 * validate: (m) => {
+	 *   const errors: ValidationError[] = [];
+	 *   if (!m.email.includes("@")) {
+	 *     errors.push({ path: "/email", message: "Invalid email" });
+	 *   }
+	 *   return errors.length ? errors : true;
+	 * }
+	 * ```
 	 */
-	validate?: (model: T) => true | string;
+	validate?: (model: T) => true | string | ValidationError[];
 
 	/**
 	 * When `true` (default), prevents adding properties that don't exist
@@ -78,14 +101,6 @@ export interface ModelizeOptions<T extends object> {
 	 * @default false
 	 */
 	clone?: boolean;
-
-	/**
-	 * Optional AJV instance used to compile the schema. When omitted, a lazy
-	 * module-level singleton is used. Inject your own instance to apply
-	 * custom formats/keywords, or to isolate schema caches in long-running
-	 * processes with many dynamic schemas.
-	 */
-	ajv?: Ajv;
 }
 
 /**
@@ -116,15 +131,21 @@ export interface ValidationError {
 	message: string;
 
 	/**
-	 * For schema errors: the AJV keyword that failed (e.g. `"minimum"`,
-	 * `"required"`, `"type"`). Absent for custom-validator errors.
+	 * The schema keyword that failed (e.g. `"minimum"`, `"required"`,
+	 * `"type"`).
+	 *
+	 * Populated by the bundled AJV adapter (`ajvSchema()`). Other Standard
+	 * Schema libraries do not report a keyword, so this is absent for them —
+	 * as it is for custom-validator errors.
 	 */
 	keyword?: string;
 
 	/**
-	 * For schema errors: additional structured information about the failure
-	 * as provided by AJV (e.g. `{ limit: 0, comparison: ">=" }` for `minimum`).
-	 * Absent for custom-validator errors.
+	 * Additional structured information about the failure (e.g.
+	 * `{ limit: 0, comparison: ">=" }` for `minimum`).
+	 *
+	 * Populated by the bundled AJV adapter (`ajvSchema()`) only; see
+	 * {@link ValidationError.keyword}.
 	 */
 	params?: Record<string, unknown>;
 }
@@ -337,26 +358,37 @@ const RESERVED_NAMES: ReadonlySet<string> = new Set([
 const MODELIZED_TAG: unique symbol = Symbol.for("@marianmeres/modelize.tag");
 
 // -----------------------------------------------------------------------------
-// AJV
+// Standard Schema
 // -----------------------------------------------------------------------------
 
-let defaultAjv: Ajv | null = null;
-
-function getDefaultAjv(): Ajv {
-	if (!defaultAjv) defaultAjv = new Ajv({ allErrors: true });
-	return defaultAjv;
+/**
+ * Duck-typed thenable check. Deliberately not `instanceof Promise`: a schema
+ * library may return a thenable from another realm or a custom Promise
+ * implementation, and treating one as a success result would silently pass
+ * validation.
+ */
+function isThenable(x: unknown): x is Promise<unknown> {
+	return (
+		x !== null && typeof x === "object" &&
+		typeof (x as { then?: unknown }).then === "function"
+	);
 }
 
-function ajvErrorsToValidationErrors(
-	errors: ErrorObject[] | null | undefined,
+function issuesToValidationErrors(
+	issues: ReadonlyArray<StandardSchemaV1.Issue>,
 ): ValidationError[] {
-	if (!errors) return [];
-	return errors.map((e) => ({
-		path: e.instancePath || "/",
-		message: e.message || "Unknown validation error",
-		keyword: e.keyword,
-		params: e.params as Record<string, unknown>,
-	}));
+	return issues.map((issue) => {
+		const { keyword, params } = issue as ModelizeIssue;
+		const error: ValidationError = {
+			path: issuePathToPointer(issue.path),
+			message: issue.message || "Unknown validation error",
+		};
+		// Only the AJV adapter supplies these; keep them off the object
+		// entirely for schemas that don't, rather than as `undefined` keys.
+		if (keyword !== undefined) error.keyword = keyword;
+		if (params !== undefined) error.params = params;
+		return error;
+	});
 }
 
 // -----------------------------------------------------------------------------
@@ -433,7 +465,7 @@ export function isModelized<T extends object = Record<string, unknown>>(
 
 /**
  * Wraps a source object with a Proxy that provides dirty tracking,
- * validation (JSON Schema + custom), atomic bulk updates, and a
+ * validation (Standard Schema + custom), atomic bulk updates, and a
  * Svelte-compatible `subscribe` contract.
  *
  * See {@link ModelizeOptions} for configuration and
@@ -448,8 +480,19 @@ export function modelize<T extends object>(
 		validate: customValidator,
 		strict = true,
 		clone = false,
-		ajv: ajvOverride,
 	} = options;
+
+	// Fail at the call site rather than later from a property read. The
+	// overwhelmingly likely cause is a plain JSON Schema left over from v2.
+	if (schema !== undefined && !isStandardSchema(schema)) {
+		throw new TypeError(
+			`modelize: "schema" must be a Standard Schema (https://standardschema.dev). ` +
+				`Plain JSON Schema documents are no longer accepted directly — wrap one with ` +
+				`ajvSchema():\n` +
+				`  import { ajvSchema } from "@marianmeres/modelize/ajv";\n` +
+				`  modelize(data, { schema: ajvSchema(jsonSchema) });`,
+		);
+	}
 
 	const working = clone ? deepClone(source) : source;
 
@@ -471,11 +514,16 @@ export function modelize<T extends object>(
 	const pubsub = createPubSub();
 	const CHANGE_EVENT = "change";
 
-	// Compiled schema validator (lazy)
-	let compiledValidator: ValidateFunction | null = null;
-
 	// Cached validation result; invalidated on any data mutation.
 	let cachedValidation: { valid: boolean; errors: ValidationError[] } | null = null;
+
+	// Sticky failure for the current state (e.g. an async schema). Cached so a
+	// repeated read doesn't re-run the validator — which, for a Zod async
+	// refinement, would restart and abandon the async work on every access.
+	// The flag is separate from the value so that a validator throwing a falsy
+	// value (`throw null`) still caches.
+	let hasCachedFailure = false;
+	let cachedFailure: unknown = null;
 
 	// Per-property subscribers
 	const keySubs = new Map<
@@ -483,30 +531,45 @@ export function modelize<T extends object>(
 		Set<(value: unknown, prev: unknown) => void>
 	>();
 
-	function getCompiledValidator(): ValidateFunction | null {
-		if (schema && !compiledValidator) {
-			compiledValidator = (ajvOverride ?? getDefaultAjv()).compile(schema);
-		}
-		return compiledValidator;
-	}
-
 	function runValidation(
 		candidate: T,
 	): { valid: boolean; errors: ValidationError[] } {
 		const errors: ValidationError[] = [];
 
-		const validator = getCompiledValidator();
-		if (validator) {
-			const valid = validator(candidate);
-			if (!valid) {
-				errors.push(...ajvErrorsToValidationErrors(validator.errors));
+		if (schema) {
+			const result = schema["~standard"].validate(candidate);
+			if (isThenable(result)) {
+				throw new TypeError(
+					`modelize: schema validation must be synchronous, but the ` +
+						`"${schema["~standard"].vendor}" schema returned a Promise. ` +
+						`Validation runs inside the synchronous __isValid / __errors / ` +
+						`__validate() accessors, so async schemas cannot be supported. ` +
+						`Remove the async refinement, or validate outside modelize.`,
+				);
 			}
+			if (result.issues) {
+				errors.push(...issuesToValidationErrors(result.issues));
+			}
+			// NOTE: `result.value` is deliberately discarded — the schema acts
+			// as a validator only. See ModelizeOptions.schema.
 		}
 
 		if (customValidator) {
 			const result = customValidator(candidate);
 			if (result !== true) {
-				errors.push({ path: "/", message: result });
+				if (typeof result === "string") {
+					errors.push({ path: "/", message: result });
+				} else if (Array.isArray(result)) {
+					errors.push(...result);
+				} else {
+					throw new TypeError(
+						`modelize: the "validate" function must return true, an error ` +
+							`message string, or a ValidationError[] — got ` +
+							`${result === null ? "null" : typeof result}. ` +
+							`A validator that falls through without returning is the ` +
+							`usual cause.`,
+					);
+				}
 			}
 		}
 
@@ -514,14 +577,23 @@ export function modelize<T extends object>(
 	}
 
 	function getValidation(): { valid: boolean; errors: ValidationError[] } {
+		if (hasCachedFailure) throw cachedFailure;
 		if (!cachedValidation) {
-			cachedValidation = runValidation(working);
+			try {
+				cachedValidation = runValidation(working);
+			} catch (err) {
+				hasCachedFailure = true;
+				cachedFailure = err;
+				throw err;
+			}
 		}
 		return cachedValidation;
 	}
 
 	function invalidateValidation() {
 		cachedValidation = null;
+		hasCachedFailure = false;
+		cachedFailure = null;
 	}
 
 	function notify() {
@@ -633,7 +705,16 @@ export function modelize<T extends object>(
 					) => {
 						const keys = Object.keys(data) as (keyof T)[];
 
-						// 1. Atomic strict-mode check before any mutation.
+						// 1. Atomic pre-checks before any mutation. Reserved
+						// names are rejected here exactly as the `set` trap
+						// rejects them, so __hydrate can't smuggle one in.
+						for (const k of keys) {
+							if (RESERVED_NAMES.has(String(k))) {
+								throw new Error(
+									`Cannot set reserved property "${String(k)}"`,
+								);
+							}
+						}
 						if (strict) {
 							for (const k of keys) {
 								if (!(k in (target as object))) {
@@ -648,10 +729,16 @@ export function modelize<T extends object>(
 
 						// 2. Optional pre-apply validation against a candidate state.
 						if (opts?.validate) {
-							const candidate = {
-								...(target as Record<string, unknown>),
-								...(data as Record<string, unknown>),
-							} as T;
+							// Mirror the target faithfully: preserve the
+							// prototype (class methods, `instanceof`) and copy
+							// property descriptors so accessors stay live and
+							// recompute from the candidate rather than being
+							// frozen at their pre-update values.
+							const candidate = Object.create(
+								Object.getPrototypeOf(target),
+								Object.getOwnPropertyDescriptors(target),
+							) as T;
+							Object.assign(candidate, data);
 							const { valid, errors } = runValidation(candidate);
 							if (!valid) {
 								throw new ModelizeValidationError(

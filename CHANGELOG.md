@@ -1,5 +1,117 @@
 # Changelog
 
+## 3.0.0 — Standard Schema, AJV unbundled
+
+**Breaking.** The core no longer bundles a validator. Validation goes through the
+[Standard Schema](https://standardschema.dev) interface — the common contract implemented
+by Zod, Valibot, ArkType, yup, joi and many others — and JSON Schema support moves to a
+`/ajv` subpath.
+
+The core bundle drops from ~36 KB gzipped (AJV alone) to **~3 KB gzipped**, and contains
+no `new Function` / `eval`, so `modelize` now works under a strict Content Security
+Policy.
+
+### Breaking changes
+
+- **`options.schema` now takes a Standard Schema, not a JSON Schema.** Wrap JSON Schema
+  documents with `ajvSchema()` from `@marianmeres/modelize/ajv`:
+
+  ```diff
+  + import { ajvSchema } from "@marianmeres/modelize/ajv";
+
+    modelize(data, {
+  -   schema: { type: "object", properties: { age: { type: "number", minimum: 0 } } },
+  +   schema: ajvSchema({ type: "object", properties: { age: { type: "number", minimum: 0 } } }),
+    });
+  ```
+
+  Passing a plain object throws a `TypeError` at the `modelize()` call, with these
+  instructions in the message — the break is loud, not silent.
+
+- **`options.ajv` removed.** Pass the instance to the adapter instead:
+
+  ```diff
+  - modelize(data, { ajv: myAjv, schema: mySchema });
+  + modelize(data, { schema: ajvSchema(mySchema, myAjv) });
+  ```
+
+- **`ajv` is now an optional peer dependency** on npm, not a dependency. Install it
+  explicitly if you use the `/ajv` subpath. On JSR it is pulled in only by that subpath.
+
+- **`JSONSchema` moved** from the main entry point to `@marianmeres/modelize/ajv`. The
+  core no longer has a JSON Schema concept.
+
+- **Schemas compile eagerly.** `ajvSchema()` compiles when called, so a malformed schema
+  throws at the definition site rather than on first validation.
+
+### Added
+
+- **`options.validate` may now return `ValidationError[]`** in addition to
+  `true | string`, so custom validators can report field-level errors instead of one
+  root-level message. An empty array means valid. This closes the long-standing gap where
+  a custom validator could only produce a single error at `"/"`.
+
+- **`isStandardSchema(x)`** type guard, exported from the main entry. Accepts callable
+  schemas (ArkType) as well as objects, and guards against proxies that throw on property
+  access.
+
+- **`StandardSchemaV1`** and **`ModelizeIssue`** types, exported from the main entry. The
+  spec interface is vendored (as the spec encourages), so there is no new dependency.
+
+- **`ajvSchema(schema, ajv?)`** on the `@marianmeres/modelize/ajv` subpath.
+
+### Hardening
+
+- **Async detection duck-types `.then`** instead of `instanceof Promise`, so a thenable
+  from another realm or a custom Promise implementation is rejected rather than silently
+  treated as a successful result.
+- **A custom validator returning an unsupported value now throws a clear `TypeError`**
+  naming the mistake, instead of `result is not iterable`. Forgetting `return true` is the
+  usual cause.
+- **`__hydrate({ validate: true })` now validates a faithful candidate**: the pre-apply
+  object preserves the target's prototype and property descriptors, so `instanceof` still
+  holds and accessors recompute from the candidate state instead of being frozen at their
+  pre-update values.
+- **`__hydrate` rejects reserved property names**, matching the `set` trap. Previously,
+  under `strict: false`, a reserved key could be written straight onto the source where
+  the proxy would then permanently shadow it.
+- **The sticky validation-failure cache no longer misses on falsy throws** (`throw null`).
+
+### Behavior notes
+
+- **Schemas validate; they do not transform.** Standard Schema returns a possibly
+  transformed value and `modelize` discards it, so Zod `.default()`, `.transform()` and
+  `z.coerce` are _checked_ but never written back to the model. A getter cannot mutate the
+  model, and defaults adding keys would violate strict mode, so this is forced by the
+  design rather than a compromise. Documented in the README and API reference, and locked
+  down by tests.
+
+- **Async schemas throw.** A `validate()` returning a `Promise` (e.g. a Zod `async`
+  refinement) raises a `TypeError` naming the vendor, on first read of
+  `__isValid`/`__errors`/`__validate()`. The spec explicitly sanctions sync-only consumers
+  rejecting Promises. The thrown error is cached per state, so a repeated read does not
+  restart and abandon the async work.
+
+- **Error shape is unchanged for the AJV path.** `ajvSchema()` round-trips AJV's
+  `instancePath` exactly (including RFC 6901 `~0`/`~1` escaping) and preserves `keyword`
+  and `params`, so migrated code sees identical `ValidationError` values. Other Standard
+  Schema libraries do not report a keyword; those fields are then omitted from the object
+  entirely rather than set to `undefined`.
+
+- **Issue paths are normalized.** Standard Schema allows path segments to be bare keys or
+  `{ key }` objects, and permits an absent path; all three map correctly to a JSON
+  Pointer, with symbol keys stringified.
+
+### Documentation
+
+- New README sections: _Choosing a Validator_ (including the CSP tradeoff), _Schemas
+  Validate, They Don't Transform_, and a 2.x → 3.0 migration guide.
+- Documented two long-standing behaviors that were never written down: the default AJV
+  instance has no `ajv-formats`, so `format` keywords are **accepted and ignored**; and
+  AJV throws `no schema with key or ref` for non-canonical `$schema` URIs.
+- Guidance on `z.fromJSONSchema()` for JSON Schema holders who need a CSP-safe path,
+  including the constraints it silently drops.
+
 ## 2.1.0 — Correctness & ergonomics pass
 
 This release is a comprehensive bug-fix and polish pass. It is **behavior-compatible for

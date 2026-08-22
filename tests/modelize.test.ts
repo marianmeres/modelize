@@ -1,5 +1,13 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { isModelized, modelize, ModelizeValidationError } from "../src/mod.ts";
+import {
+	isModelized,
+	isStandardSchema,
+	modelize,
+	ModelizeValidationError,
+	type StandardSchemaV1,
+	type ValidationError,
+} from "../src/mod.ts";
+import { ajvSchema } from "../src/ajv.ts";
 
 // -----------------------------------------------------------------------------
 // Basic proxy behavior
@@ -224,12 +232,12 @@ Deno.test("JSON schema validation passes for valid data", () => {
 	const model = modelize(
 		{ age: 25 },
 		{
-			schema: {
+			schema: ajvSchema({
 				type: "object",
 				properties: {
 					age: { type: "number", minimum: 0 },
 				},
-			},
+			}),
 		},
 	);
 
@@ -240,12 +248,12 @@ Deno.test("JSON schema validation fails for invalid data", () => {
 	const model = modelize(
 		{ age: -5 },
 		{
-			schema: {
+			schema: ajvSchema({
 				type: "object",
 				properties: {
 					age: { type: "number", minimum: 0 },
 				},
-			},
+			}),
 		},
 	);
 
@@ -257,12 +265,12 @@ Deno.test("__validate throws ModelizeValidationError for invalid data", () => {
 	const model = modelize(
 		{ age: -5 },
 		{
-			schema: {
+			schema: ajvSchema({
 				type: "object",
 				properties: {
 					age: { type: "number", minimum: 0 },
 				},
-			},
+			}),
 		},
 	);
 
@@ -277,13 +285,13 @@ Deno.test("validation error contains field-level details", () => {
 	const model = modelize(
 		{ age: -5, name: 123 },
 		{
-			schema: {
+			schema: ajvSchema({
 				type: "object",
 				properties: {
 					age: { type: "number", minimum: 0 },
 					name: { type: "string" },
 				},
-			},
+			}),
 		},
 	);
 
@@ -334,12 +342,12 @@ Deno.test("both schema and custom validator can be used together", () => {
 	const model = modelize(
 		{ age: 25, status: "invalid" },
 		{
-			schema: {
+			schema: ajvSchema({
 				type: "object",
 				properties: {
 					age: { type: "number", minimum: 0 },
 				},
-			},
+			}),
 			validate: (m) =>
 				m.status === "active" || m.status === "inactive"
 					? true
@@ -539,10 +547,10 @@ Deno.test("__hydrate({ validate: true }) rejects invalid candidate without mutat
 	const model = modelize(
 		{ age: 10 },
 		{
-			schema: {
+			schema: ajvSchema({
 				type: "object",
 				properties: { age: { type: "number", minimum: 0 } },
-			},
+			}),
 		},
 	);
 
@@ -559,10 +567,10 @@ Deno.test("__hydrate({ validate: true }) applies when valid", () => {
 	const model = modelize(
 		{ age: 10 },
 		{
-			schema: {
+			schema: ajvSchema({
 				type: "object",
 				properties: { age: { type: "number", minimum: 0 } },
-			},
+			}),
 		},
 	);
 
@@ -689,10 +697,10 @@ Deno.test("__errors is consistent with current state without calling __isValid f
 	const model = modelize(
 		{ age: 10 },
 		{
-			schema: {
+			schema: ajvSchema({
 				type: "object",
 				properties: { age: { type: "number", minimum: 0 } },
-			},
+			}),
 		},
 	);
 
@@ -708,10 +716,10 @@ Deno.test("__errors exposes AJV keyword and params", () => {
 	const model = modelize(
 		{ age: -5 },
 		{
-			schema: {
+			schema: ajvSchema({
 				type: "object",
 				properties: { age: { type: "number", minimum: 0 } },
-			},
+			}),
 		},
 	);
 
@@ -842,10 +850,10 @@ Deno.test("isModelized identifies proxies from modelize()", () => {
 });
 
 // -----------------------------------------------------------------------------
-// AJV override
+// AJV adapter
 // -----------------------------------------------------------------------------
 
-Deno.test("options.ajv uses the injected instance", async () => {
+Deno.test("ajvSchema uses the injected Ajv instance", async () => {
 	const { Ajv } = await import("ajv");
 	const ajv = new Ajv({ allErrors: true });
 	let compileCalls = 0;
@@ -858,16 +866,57 @@ Deno.test("options.ajv uses the injected instance", async () => {
 	const model = modelize(
 		{ age: -5 },
 		{
-			ajv,
-			schema: {
+			schema: ajvSchema({
 				type: "object",
 				properties: { age: { type: "number", minimum: 0 } },
-			},
+			}, ajv),
 		},
 	);
 
 	assertEquals(model.__isValid, false);
 	assertEquals(compileCalls, 1);
+});
+
+Deno.test("ajvSchema is a Standard Schema", () => {
+	const schema = ajvSchema({ type: "object" });
+
+	assert(isStandardSchema(schema));
+	assertEquals(schema["~standard"].version, 1);
+	assertEquals(schema["~standard"].vendor, "ajv");
+});
+
+Deno.test("ajvSchema compiles eagerly and throws on an invalid schema", () => {
+	assertThrows(() => ajvSchema({ type: "not-a-real-type" }));
+});
+
+Deno.test("ajvSchema round-trips JSON Pointer escaping for exotic keys", () => {
+	// AJV reports instancePath "/a~1b" for the key "a/b"; modelize must
+	// reconstruct exactly that pointer from the Standard Schema path array.
+	const model = modelize(
+		{ "a/b": "x", "c~d": "y" },
+		{
+			schema: ajvSchema({
+				type: "object",
+				properties: {
+					"a/b": { type: "number" },
+					"c~d": { type: "number" },
+				},
+			}),
+		},
+	);
+
+	const paths = model.__errors.map((e) => e.path).sort();
+	assertEquals(paths, ["/a~1b", "/c~0d"]);
+});
+
+Deno.test("ajvSchema reports root-level errors as '/'", () => {
+	const model = modelize(
+		{ a: 1 },
+		{ schema: ajvSchema({ type: "object", maxProperties: 0 }) },
+	);
+
+	assertEquals(model.__isValid, false);
+	assertEquals(model.__errors[0].path, "/");
 });
 
 // -----------------------------------------------------------------------------
@@ -894,4 +943,419 @@ Deno.test("validation is cached and invalidated on mutation", () => {
 	model.age = 20; // mutation invalidates cache
 	model.__isValid;
 	assertEquals(customRuns, 2);
+});
+
+// -----------------------------------------------------------------------------
+// Standard Schema — detection
+// -----------------------------------------------------------------------------
+
+/** Minimal hand-rolled Standard Schema, for exercising exact issue shapes. */
+function stdSchema(
+	validate: StandardSchemaV1.Props["validate"],
+	vendor = "test",
+): StandardSchemaV1 {
+	return { "~standard": { version: 1, vendor, validate } };
+}
+
+Deno.test("isStandardSchema accepts a conforming object", () => {
+	assert(isStandardSchema(stdSchema(() => ({ value: 1 }))));
+});
+
+Deno.test("isStandardSchema accepts a callable schema (ArkType style)", () => {
+	// ArkType schemas are functions, not plain objects.
+	const callable = Object.assign(() => {}, {
+		"~standard": { version: 1, vendor: "arktype", validate: () => ({ value: 1 }) },
+	});
+
+	assert(isStandardSchema(callable));
+});
+
+Deno.test("isStandardSchema rejects non-schemas", () => {
+	assert(!isStandardSchema(null));
+	assert(!isStandardSchema(undefined));
+	assert(!isStandardSchema(42));
+	assert(!isStandardSchema({ type: "object" })); // plain JSON Schema
+	assert(!isStandardSchema({ "~standard": { version: 2, validate: () => {} } }));
+	assert(!isStandardSchema({ "~standard": { version: 1 } })); // no validate
+	assert(!isStandardSchema({ "~standard": null }));
+});
+
+Deno.test("modelize throws at call time for a plain JSON Schema", () => {
+	assertThrows(
+		// deno-lint-ignore no-explicit-any
+		() => modelize({ age: 1 }, { schema: { type: "object" } as any }),
+		TypeError,
+		"ajvSchema",
+	);
+});
+
+// -----------------------------------------------------------------------------
+// Standard Schema — validation & issue mapping
+// -----------------------------------------------------------------------------
+
+Deno.test("validates through a Standard Schema", () => {
+	const schema = stdSchema((value) => {
+		const v = value as { age: number };
+		return v.age >= 0
+			? { value: v }
+			: { issues: [{ message: "must be >= 0", path: ["age"] }] };
+	});
+
+	const model = modelize({ age: 25 }, { schema });
+	assertEquals(model.__isValid, true);
+
+	model.age = -5;
+	assertEquals(model.__isValid, false);
+	assertEquals(model.__errors, [{ path: "/age", message: "must be >= 0" }]);
+});
+
+Deno.test("maps nested issue paths to JSON pointers", () => {
+	const schema = stdSchema(() => ({
+		issues: [{ message: "bad", path: ["address", "city"] }],
+	}));
+
+	const model = modelize({ address: { city: "" } }, { schema });
+	assertEquals(model.__errors[0].path, "/address/city");
+});
+
+Deno.test("maps { key } path segment objects", () => {
+	const schema = stdSchema(() => ({
+		issues: [{ message: "bad", path: [{ key: "items" }, { key: 0 }, "name"] }],
+	}));
+
+	const model = modelize({ items: [] }, { schema });
+	assertEquals(model.__errors[0].path, "/items/0/name");
+});
+
+Deno.test("maps an absent or empty issue path to root", () => {
+	const noPath = modelize({ a: 1 }, {
+		schema: stdSchema(() => ({ issues: [{ message: "root" }] })),
+	});
+	assertEquals(noPath.__errors[0].path, "/");
+
+	const emptyPath = modelize({ a: 1 }, {
+		schema: stdSchema(() => ({ issues: [{ message: "root", path: [] }] })),
+	});
+	assertEquals(emptyPath.__errors[0].path, "/");
+});
+
+Deno.test("escapes '/' and '~' in issue path segments", () => {
+	const schema = stdSchema(() => ({
+		issues: [{ message: "bad", path: ["a/b", "c~d"] }],
+	}));
+
+	const model = modelize({ a: 1 }, { schema });
+	assertEquals(model.__errors[0].path, "/a~1b/c~0d");
+});
+
+Deno.test("stringifies symbol path segments without throwing", () => {
+	const sym = Symbol("secret");
+	const schema = stdSchema(() => ({
+		issues: [{ message: "bad", path: [sym, { key: 1 }] }],
+	}));
+
+	const model = modelize({ a: 1 }, { schema });
+	assertEquals(model.__errors[0].path, "/Symbol(secret)/1");
+});
+
+Deno.test("Standard Schema errors carry no keyword/params", () => {
+	const schema = stdSchema(() => ({ issues: [{ message: "bad" }] }));
+	const model = modelize({ a: 1 }, { schema });
+
+	assertEquals(model.__errors[0].keyword, undefined);
+	assertEquals(model.__errors[0].params, undefined);
+	assert(!("keyword" in model.__errors[0]));
+});
+
+Deno.test("schema and custom validator combine, schema errors first", () => {
+	const model = modelize(
+		{ age: -5 },
+		{
+			schema: stdSchema(() => ({ issues: [{ message: "schema error" }] })),
+			validate: () => "custom error",
+		},
+	);
+
+	assertEquals(model.__errors.length, 2);
+	assertEquals(model.__errors[0].message, "schema error");
+	assertEquals(model.__errors[1].message, "custom error");
+});
+
+Deno.test("__hydrate({ validate: true }) works with a Standard Schema", () => {
+	const schema = stdSchema((value) => {
+		const v = value as { age: number };
+		return v.age >= 0
+			? { value: v }
+			: { issues: [{ message: "neg", path: ["age"] }] };
+	});
+	const model = modelize({ age: 10 }, { schema });
+
+	assertThrows(
+		() => model.__hydrate({ age: -1 }, { validate: true }),
+		ModelizeValidationError,
+	);
+	assertEquals(model.age, 10);
+
+	model.__hydrate({ age: 20 }, { validate: true });
+	assertEquals(model.age, 20);
+});
+
+// -----------------------------------------------------------------------------
+// Standard Schema — async rejection
+// -----------------------------------------------------------------------------
+
+Deno.test("throws a TypeError when the schema validates asynchronously", () => {
+	const schema = stdSchema(() => Promise.resolve({ value: 1 }), "zod");
+	const model = modelize({ a: 1 }, { schema });
+
+	assertThrows(() => model.__isValid, TypeError, "must be synchronous");
+	assertThrows(() => model.__isValid, TypeError, "zod");
+});
+
+Deno.test("async failure is cached per state and re-checked after mutation", () => {
+	let calls = 0;
+	const schema = stdSchema(() => {
+		calls++;
+		return Promise.resolve({ value: 1 });
+	});
+	const model = modelize({ a: 1 }, { schema });
+
+	assertThrows(() => model.__isValid, TypeError);
+	assertThrows(() => model.__errors, TypeError);
+	assertThrows(() => model.__validate(), TypeError);
+	assertEquals(calls, 1); // not re-run for the same state
+
+	model.a = 2;
+	assertThrows(() => model.__isValid, TypeError);
+	assertEquals(calls, 2); // re-checked after mutation
+});
+
+// -----------------------------------------------------------------------------
+// Custom validator returning ValidationError[]
+// -----------------------------------------------------------------------------
+
+Deno.test("custom validator can return field-level errors", () => {
+	const model = modelize(
+		{ email: "nope", age: -1 },
+		{
+			validate: (m) => {
+				const errors: ValidationError[] = [];
+				if (!m.email.includes("@")) {
+					errors.push({ path: "/email", message: "Invalid email" });
+				}
+				if (m.age < 0) errors.push({ path: "/age", message: "Must be >= 0" });
+				return errors.length ? errors : true;
+			},
+		},
+	);
+
+	assertEquals(model.__isValid, false);
+	assertEquals(model.__errors.length, 2);
+	assertEquals(model.__errors[0].path, "/email");
+	assertEquals(model.__errors[1].path, "/age");
+});
+
+Deno.test("custom validator returning an empty array means valid", () => {
+	const model = modelize({ a: 1 }, { validate: () => [] });
+
+	assertEquals(model.__isValid, true);
+	assertEquals(model.__errors, []);
+});
+
+Deno.test("custom validator errors pass through keyword/params untouched", () => {
+	const model = modelize({ a: 1 }, {
+		validate: () => [
+			{ path: "/a", message: "x", keyword: "custom", params: { n: 1 } },
+		],
+	});
+
+	assertEquals(model.__errors[0].keyword, "custom");
+	assertEquals(model.__errors[0].params, { n: 1 });
+});
+
+// -----------------------------------------------------------------------------
+// Standard Schema — real-library interop (Zod)
+// -----------------------------------------------------------------------------
+
+Deno.test("interops with a real Zod schema", async () => {
+	const z = await import("zod");
+	const model = modelize({ name: "", age: -1 }, {
+		schema: z.object({ name: z.string().min(1), age: z.number().min(0) }),
+	});
+
+	assertEquals(model.__isValid, false);
+	assertEquals(model.__errors.map((e) => e.path).sort(), ["/age", "/name"]);
+
+	model.name = "John";
+	model.age = 30;
+	assertEquals(model.__isValid, true);
+	assertEquals(model.__errors, []);
+});
+
+Deno.test("maps nested Zod issue paths to JSON pointers", async () => {
+	const z = await import("zod");
+	const model = modelize({ items: [{ name: "" }] }, {
+		schema: z.object({ items: z.array(z.object({ name: z.string().min(1) })) }),
+	});
+
+	assertEquals(model.__errors[0].path, "/items/0/name");
+});
+
+Deno.test("Zod coercion is checked but NOT written back to the model", async () => {
+	const z = await import("zod");
+	const model = modelize({ age: "42" }, {
+		schema: z.object({ age: z.coerce.number() }),
+	});
+
+	// The schema accepts it (it coerces), but the model keeps the raw string.
+	assertEquals(model.__isValid, true);
+	assertEquals(model.age, "42");
+});
+
+Deno.test("Zod defaults are checked but do not add keys to the model", async () => {
+	const z = await import("zod");
+	const model = modelize({ a: "y" }, {
+		schema: z.object({ a: z.string(), b: z.string().default("x") }),
+	});
+
+	assertEquals(model.__isValid, true);
+	assertEquals((model as unknown as Record<string, unknown>).b, undefined);
+	assert(!("b" in model.__source));
+});
+
+Deno.test("a Zod async refinement throws instead of validating", async () => {
+	const z = await import("zod");
+	const model = modelize({ a: "x" }, {
+		schema: z.object({
+			a: z.string().refine(() => Promise.resolve(true), "nope"),
+		}),
+	});
+
+	assertThrows(() => model.__isValid, TypeError, "must be synchronous");
+});
+
+// -----------------------------------------------------------------------------
+// Regression: robustness of the validation contract
+// -----------------------------------------------------------------------------
+
+Deno.test("rejects a non-native thenable, not just Promise instances", () => {
+	// A thenable from another realm / custom Promise impl must not be mistaken
+	// for a success result.
+	const thenable = { then: (r: (v: unknown) => void) => r({ value: 1 }) };
+	const model = modelize({ a: 1 }, {
+		schema: stdSchema(() => thenable as unknown as { value: unknown }, "custom"),
+	});
+
+	assertThrows(() => model.__isValid, TypeError, "must be synchronous");
+});
+
+Deno.test("custom validator returning an invalid type throws a clear error", () => {
+	for (const bad of [undefined, false, 42, null, {}]) {
+		const model = modelize({ a: 1 }, {
+			// deno-lint-ignore no-explicit-any
+			validate: (() => bad) as any,
+		});
+		assertThrows(() => model.__isValid, TypeError, "must return true");
+	}
+});
+
+Deno.test("sticky failure cache works for a falsy thrown value", () => {
+	let calls = 0;
+	const model = modelize({ a: 1 }, {
+		validate: () => {
+			calls++;
+			throw null;
+		},
+	});
+
+	assertThrows(() => model.__isValid);
+	assertThrows(() => model.__errors);
+	assertEquals(calls, 1); // cached despite `null` being falsy
+});
+
+Deno.test("__hydrate({ validate: true }) candidate keeps prototype and live getters", () => {
+	class Person {
+		constructor(public first: string, public last: string) {}
+		get full(): string {
+			return `${this.first} ${this.last}`;
+		}
+	}
+	const seen: { isPerson: boolean; full: string }[] = [];
+
+	const model = modelize(new Person("Al", "Bo"), {
+		validate: (m) => {
+			seen.push({ isPerson: m instanceof Person, full: m.full });
+			return true;
+		},
+	});
+
+	model.__hydrate({ first: "Cy" }, { validate: true });
+
+	// The candidate must be a Person whose getter reflects the CANDIDATE state.
+	assertEquals(seen.at(-1), { isPerson: true, full: "Cy Bo" });
+});
+
+Deno.test("__hydrate rejects reserved property names", () => {
+	const model = modelize({ a: 1 }, { strict: false });
+
+	assertThrows(
+		// deno-lint-ignore no-explicit-any
+		() => model.__hydrate({ __dirty: "x" } as any),
+		Error,
+		"reserved",
+	);
+	assert(!Object.keys(model.__source).includes("__dirty"));
+});
+
+// -----------------------------------------------------------------------------
+// AJV strict mode (documented behavior)
+// -----------------------------------------------------------------------------
+
+Deno.test("default AJV instance is strict: unknown format throws at ajvSchema()", () => {
+	assertThrows(
+		() =>
+			ajvSchema({
+				type: "object",
+				properties: { e: { type: "string", format: "email" } },
+			}),
+		Error,
+		'unknown format "email"',
+	);
+});
+
+Deno.test("default AJV instance is strict: unknown keyword throws", () => {
+	assertThrows(
+		() => ajvSchema({ type: "object", notAKeyword: 1 }),
+		Error,
+		"unknown keyword",
+	);
+});
+
+Deno.test("strict:false instance accepts and ignores unknown formats", async () => {
+	const { Ajv } = await import("ajv");
+	const schema = ajvSchema(
+		{ type: "object", properties: { e: { type: "string", format: "email" } } },
+		new Ajv({ allErrors: true, strict: false }),
+	);
+
+	const model = modelize({ e: "not-an-email" }, { schema });
+	assertEquals(model.__isValid, true); // format genuinely ignored
+});
+
+Deno.test("ajv-formats instance enforces formats", async () => {
+	const { Ajv } = await import("ajv");
+	const mod = await import("ajv-formats");
+	// ajv-formats' CJS default export needs unwrapping under Deno's interop.
+	const addFormats = (mod.default ??
+		mod) as unknown as (ajv: unknown) => void;
+	const ajv = new Ajv({ allErrors: true });
+	addFormats(ajv);
+
+	const schema = ajvSchema(
+		{ type: "object", properties: { e: { type: "string", format: "email" } } },
+		ajv,
+	);
+
+	assertEquals(modelize({ e: "nope" }, { schema }).__isValid, false);
+	assertEquals(modelize({ e: "a@b.co" }, { schema }).__isValid, true);
 });
